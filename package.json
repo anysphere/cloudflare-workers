@@ -1,0 +1,23 @@
+{
+  "name": "cursor-pool-workers-on-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Template: run Cursor self-hosted pool workers on Cloudflare Containers with a Worker-based scheduler",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260729.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.115.0"
+  }
+}

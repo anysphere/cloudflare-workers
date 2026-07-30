@@ -1,0 +1,13 @@
+# Canonical tasks. See .cursor/skills/devex/mise-monorepo-tasks/SKILL.md.
+
+[tasks.build]
+description = "Validate wrangler config and build the container image (dry-run deploy; needs Docker)"
+run = "npx wrangler deploy --dry-run"
+
+[tasks.test]
+description = "Run the scheduler/matching/config unit tests with vitest"
+run = "npm test"
+
+[tasks.lint]
+description = "Typecheck the Worker sources (report only)"
+run = "npx tsc --noEmit"
