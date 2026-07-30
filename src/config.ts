@@ -2,6 +2,8 @@ import type { PoolConfig } from "./types";
 
 /** Defaults applied when the corresponding wrangler var is unset. */
 export const DEFAULT_MAX_WORKERS_PER_POOL = 3;
+/** Keep this many containers warm per pool so the pool stays visible in the UI. */
+export const DEFAULT_MIN_WORKERS_PER_POOL = 1;
 export const DEFAULT_POLL_INTERVAL_SECONDS = 20;
 export const DEFAULT_IDLE_RELEASE_TIMEOUT_SECONDS = 300;
 export const DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
@@ -32,10 +34,11 @@ export function parsePoolsConfig(raw: string | undefined): PoolConfig[] {
     if (typeof entry !== "object" || entry === null) {
       throw new Error("Each POOLS entry must be an object");
     }
-    const { name, repos, maxWorkers } = entry as {
+    const { name, repos, maxWorkers, minWorkers } = entry as {
       name?: unknown;
       repos?: unknown;
       maxWorkers?: unknown;
+      minWorkers?: unknown;
     };
     if (typeof name !== "string" || !POOL_NAME_PATTERN.test(name)) {
       throw new Error(
@@ -69,7 +72,34 @@ export function parsePoolsConfig(raw: string | undefined): PoolConfig[] {
       }
       maxWorkersValue = maxWorkers;
     }
-    pools.push({ name, repos: repoUrls, maxWorkers: maxWorkersValue });
+    let minWorkersValue: number | undefined;
+    if (minWorkers !== undefined) {
+      if (
+        typeof minWorkers !== "number" ||
+        !Number.isInteger(minWorkers) ||
+        minWorkers < 0
+      ) {
+        throw new Error(
+          `Pool "${name}": minWorkers must be a non-negative integer`
+        );
+      }
+      minWorkersValue = minWorkers;
+    }
+    if (
+      minWorkersValue !== undefined &&
+      maxWorkersValue !== undefined &&
+      minWorkersValue > maxWorkersValue
+    ) {
+      throw new Error(
+        `Pool "${name}": minWorkers (${minWorkersValue}) cannot exceed maxWorkers (${maxWorkersValue})`
+      );
+    }
+    pools.push({
+      name,
+      repos: repoUrls,
+      maxWorkers: maxWorkersValue,
+      minWorkers: minWorkersValue,
+    });
   }
   return pools;
 }
@@ -84,6 +114,21 @@ export function parsePositiveInt(
   }
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
+    return fallback;
+  }
+  return value;
+}
+
+/** Parse a non-negative integer wrangler var (0 is valid) with a default. */
+export function parseNonNegativeInt(
+  raw: string | undefined,
+  fallback: number
+): number {
+  if (raw === undefined || raw.trim().length === 0) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
     return fallback;
   }
   return value;

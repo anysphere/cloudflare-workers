@@ -9,10 +9,9 @@ schedules containers for any number of Cursor worker pools:
 - **The Worker** polls Cursor's fleet API for pending agent runs
   (`GET /v0/private-workers/pending-requests`) and claims matching work by
   waking a container that boots `cursor-agent worker start --pool`.
-- **Everything scales to zero.** Pools are durable rows on the Cursor side
-  (they stay selectable in the composer at zero connected workers), the
-  scheduler runs on cheap Durable Object alarms, and containers stop as soon
-  as their worker process exits.
+- **Warm floor of 1 by default** (`MIN_WORKERS_PER_POOL`) so each pool stays
+  connected and selectable in the Cursor UI. Set it to `0` to scale fully to
+  zero when idle; the scheduler still runs on cheap Durable Object alarms.
 - **Post-clone snapshots** of each repo are cached in R2, so container boots
   restore a tarball and `git fetch` instead of paying a full clone.
 
@@ -144,7 +143,8 @@ alarm itself does the sub-minute polling.
 |---|---|---|
 | `POOLS` | `[{"name":"default","repos":[]}]` | Pools this deployment serves (JSON; `name`, `repos`, optional `maxWorkers`) |
 | `MAX_WORKERS_PER_POOL` | `3` | Container slots per pool unless overridden per pool |
-| `WORKER_IDLE_RELEASE_TIMEOUT_SECONDS` | `300` | Idle seconds before a worker exits and its container stops |
+| `MIN_WORKERS_PER_POOL` | `1` | Warm floor per pool (keeps the pool visible in the UI). Set `0` to scale fully to zero when idle |
+| `WORKER_IDLE_RELEASE_TIMEOUT_SECONDS` | `300` | Idle seconds before a serve-mode worker exits. Warm-floor workers stay up (idle-release 0) |
 | `POLL_INTERVAL_SECONDS` | `20` | Pending-request poll cadence |
 | `SNAPSHOT_MAX_AGE_SECONDS` | `604800` (7d) | Snapshots older than this are rebuilt from a fresh clone |
 | `WORKER_PUBLIC_URL` | unset | Public URL of this Worker; enables the snapshot cache |

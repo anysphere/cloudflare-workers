@@ -164,6 +164,17 @@ export interface PlanLaunchesArgs {
   readonly launchCooldownMs?: number;
 }
 
+export interface PlanWarmLaunchesArgs {
+  readonly pools: readonly PoolConfig[];
+  readonly slotsByPool: ReadonlyMap<string, readonly SlotState[]>;
+  /** Slot names already claimed by serve launches this tick. */
+  readonly reservedContainerNames: ReadonlySet<string>;
+  readonly defaultMinWorkersPerPool: number;
+  readonly defaultMaxWorkersPerPool: number;
+  readonly nowMs: number;
+  readonly launchCooldownMs?: number;
+}
+
 /**
  * Decide which container slots to launch this tick. Oldest requests win when
  * slots are scarce. A slot is eligible when its container is not running and
@@ -230,6 +241,79 @@ export function planLaunches(args: PlanLaunchesArgs): PlannedLaunch[] {
           requestId: request.id,
         },
       });
+    }
+  }
+  return launches;
+}
+
+/**
+ * Keep a warm floor of containers per pool so the pool stays registered and
+ * selectable in the Cursor UI even with no pending requests. Only pools with
+ * configured repos can be warmed (cursor-agent needs a git checkout). Slots
+ * already reserved for serve launches this tick are skipped.
+ */
+export function planWarmLaunches(args: PlanWarmLaunchesArgs): PlannedLaunch[] {
+  const cooldownMs = args.launchCooldownMs ?? LAUNCH_COOLDOWN_MS;
+  const launches: PlannedLaunch[] = [];
+
+  for (const pool of args.pools) {
+    if (pool.repos.length === 0) {
+      continue;
+    }
+    const maxWorkers = pool.maxWorkers ?? args.defaultMaxWorkersPerPool;
+    const minWorkers = Math.min(
+      pool.minWorkers ?? args.defaultMinWorkersPerPool,
+      maxWorkers
+    );
+    if (minWorkers <= 0) {
+      continue;
+    }
+
+    const knownSlots = args.slotsByPool.get(pool.name) ?? [];
+    const slotByIndex = new Map<number, SlotState>(
+      knownSlots.map((slot) => [slot.slotIndex, slot])
+    );
+
+    let warmCount = 0;
+    for (let index = 0; index < maxWorkers; index++) {
+      const containerName = containerNameForSlot(pool.name, index);
+      const slot = slotByIndex.get(index);
+      const reserved = args.reservedContainerNames.has(containerName);
+      if (slot?.running === true || reserved) {
+        warmCount += 1;
+      }
+    }
+
+    for (
+      let index = 0;
+      index < maxWorkers && warmCount < minWorkers;
+      index++
+    ) {
+      const containerName = containerNameForSlot(pool.name, index);
+      if (args.reservedContainerNames.has(containerName)) {
+        continue;
+      }
+      const slot = slotByIndex.get(index);
+      if (slot?.running === true) {
+        continue;
+      }
+      const inCooldown =
+        slot?.lastLaunchAtMs !== undefined &&
+        args.nowMs - slot.lastLaunchAtMs < cooldownMs;
+      if (inCooldown) {
+        continue;
+      }
+      launches.push({
+        containerName,
+        slotIndex: index,
+        spec: {
+          mode: "warm",
+          poolName: pool.name,
+          repoUrls: [...pool.repos],
+          workerName: `cf-${pool.name}-${index}`,
+        },
+      });
+      warmCount += 1;
     }
   }
   return launches;

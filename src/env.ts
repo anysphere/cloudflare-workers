@@ -24,6 +24,8 @@ export interface Env {
   CURSOR_API_URL?: string;
   CURSOR_AGENT_ENDPOINT?: string;
   MAX_WORKERS_PER_POOL?: string;
+  /** Warm floor per pool. Default 1; set 0 to scale fully to zero when idle. */
+  MIN_WORKERS_PER_POOL?: string;
   WORKER_IDLE_RELEASE_TIMEOUT_SECONDS?: string;
   POLL_INTERVAL_SECONDS?: string;
   SNAPSHOT_MAX_AGE_SECONDS?: string;

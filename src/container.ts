@@ -79,8 +79,14 @@ export class CursorPoolWorker extends Container<Env> {
   /**
    * Keep long agent runs alive across sleepAfter windows, but enforce a hard
    * lifetime ceiling so a wedged process cannot burn container hours forever.
+   * Warm-floor workers renew indefinitely — the scheduler maintains the floor.
    */
   override async onActivityExpired(): Promise<void> {
+    const spec = await this.ctx.storage.get<LaunchSpec>(SPEC_STORAGE_KEY);
+    if (spec?.mode === "warm") {
+      this.renewActivityTimeout();
+      return;
+    }
     const launchedAtMs =
       (await this.ctx.storage.get<number>(LAUNCHED_AT_STORAGE_KEY)) ?? 0;
     const maxLifetimeMs =
@@ -97,13 +103,18 @@ export class CursorPoolWorker extends Container<Env> {
   }
 
   private buildEnvVars(spec: LaunchSpec): Record<string, string> {
+    // Warm floor workers must stay connected (idle-release 0) or the pool
+    // disappears from the Cursor UI again. Broadcast boots are short-lived.
+    // Serve launches use the configured idle timeout.
     const idleReleaseTimeoutSeconds =
       spec.mode === "broadcast"
         ? BROADCAST_IDLE_RELEASE_TIMEOUT_SECONDS
-        : parsePositiveInt(
-            this.env.WORKER_IDLE_RELEASE_TIMEOUT_SECONDS,
-            DEFAULT_IDLE_RELEASE_TIMEOUT_SECONDS
-          );
+        : spec.mode === "warm"
+          ? 0
+          : parsePositiveInt(
+              this.env.WORKER_IDLE_RELEASE_TIMEOUT_SECONDS,
+              DEFAULT_IDLE_RELEASE_TIMEOUT_SECONDS
+            );
     const envVars: Record<string, string> = {
       CURSOR_API_KEY: this.env.CURSOR_API_KEY,
       CURSOR_WORKER_POOL_NAME: spec.poolName,

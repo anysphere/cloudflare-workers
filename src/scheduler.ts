@@ -2,7 +2,9 @@ import { DurableObject } from "cloudflare:workers";
 import { getContainer } from "@cloudflare/containers";
 import {
   DEFAULT_MAX_WORKERS_PER_POOL,
+  DEFAULT_MIN_WORKERS_PER_POOL,
   DEFAULT_POLL_INTERVAL_SECONDS,
+  parseNonNegativeInt,
   parsePoolsConfig,
   parsePositiveInt,
   poolConfigFingerprint,
@@ -13,6 +15,7 @@ import {
   containerNameForBroadcast,
   containerNameForSlot,
   planLaunches,
+  planWarmLaunches,
   REQUEST_RECORD_TTL_MS,
   requestMatchesPool,
 } from "./matching";
@@ -48,9 +51,9 @@ interface LastTickSummary {
  *      Cursor backend performs the authoritative claim the moment that worker
  *      connects, and the request drops out of the pending list.
  *
- * Pools are durable rows on the Cursor side, so nothing here needs to stay
- * up: the scheduler runs only on cheap Durable Object alarms and containers
- * stop when their worker process exits (scale to zero).
+ * By default MIN_WORKERS_PER_POOL keeps one warm container per pool so the
+ * pool is always registered and selectable in the Cursor UI. Set it to 0 to
+ * scale fully to zero when idle.
  */
 export class PoolScheduler extends DurableObject<Env> {
   private ticking = false;
@@ -95,8 +98,9 @@ export class PoolScheduler extends DurableObject<Env> {
       const pendingRequests = await client.listPendingRequests();
       summary.pendingCount = pendingRequests.length;
 
-      const launches = await this.planTick(pools, pendingRequests);
-      for (const launch of launches) {
+      const serveLaunches = await this.planTick(pools, pendingRequests);
+      const warmLaunches = await this.planWarmTick(pools, serveLaunches);
+      for (const launch of [...serveLaunches, ...warmLaunches]) {
         await this.executeLaunch(launch);
         summary.launched.push({
           containerName: launch.containerName,
@@ -204,6 +208,60 @@ export class PoolScheduler extends DurableObject<Env> {
       pools: poolsWithWork,
       slotsByPool,
       requestLaunchTimes,
+      defaultMaxWorkersPerPool: defaultMaxWorkers,
+      nowMs,
+    });
+  }
+
+  /**
+   * Fill each pool up to its warm floor (MIN_WORKERS_PER_POOL), so a pool with
+   * configured repos is always connected and visible in the composer.
+   */
+  private async planWarmTick(
+    pools: PoolConfig[],
+    serveLaunches: readonly PlannedLaunch[]
+  ): Promise<PlannedLaunch[]> {
+    const nowMs = Date.now();
+    const defaultMaxWorkers = parsePositiveInt(
+      this.env.MAX_WORKERS_PER_POOL,
+      DEFAULT_MAX_WORKERS_PER_POOL
+    );
+    const defaultMinWorkers = parseNonNegativeInt(
+      this.env.MIN_WORKERS_PER_POOL,
+      DEFAULT_MIN_WORKERS_PER_POOL
+    );
+    if (defaultMinWorkers <= 0 && pools.every((pool) => !pool.minWorkers)) {
+      return [];
+    }
+
+    const slotsByPool = new Map<string, SlotState[]>();
+    for (const pool of pools) {
+      if (pool.repos.length === 0) {
+        continue;
+      }
+      const maxWorkers = pool.maxWorkers ?? defaultMaxWorkers;
+      const slots: SlotState[] = [];
+      for (let index = 0; index < maxWorkers; index++) {
+        const stub = getContainer(
+          this.env.POOL_WORKER,
+          containerNameForSlot(pool.name, index)
+        );
+        const status = await stub.slotStatus();
+        const lastLaunchAtMs = await this.ctx.storage.get<number>(
+          `${SLOT_KEY_PREFIX}${pool.name}/${index}`
+        );
+        slots.push({ slotIndex: index, running: status.running, lastLaunchAtMs });
+      }
+      slotsByPool.set(pool.name, slots);
+    }
+
+    return planWarmLaunches({
+      pools,
+      slotsByPool,
+      reservedContainerNames: new Set(
+        serveLaunches.map((launch) => launch.containerName)
+      ),
+      defaultMinWorkersPerPool: defaultMinWorkers,
       defaultMaxWorkersPerPool: defaultMaxWorkers,
       nowMs,
     });

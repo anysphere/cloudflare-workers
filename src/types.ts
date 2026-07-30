@@ -18,6 +18,8 @@ export interface PoolConfig {
   readonly repos: readonly string[];
   /** Per-pool override of MAX_WORKERS_PER_POOL. */
   readonly maxWorkers?: number;
+  /** Per-pool override of MIN_WORKERS_PER_POOL (warm floor). */
+  readonly minWorkers?: number;
 }
 
 /** A pending agent run returned by GET /v0/private-workers/pending-requests. */
@@ -40,7 +42,7 @@ export interface SlotState {
 }
 
 /** What the container entrypoint is asked to do. */
-export type LaunchMode = "serve" | "broadcast";
+export type LaunchMode = "serve" | "broadcast" | "warm";
 
 /** Everything a container needs to boot one cursor-agent pool worker. */
 export interface LaunchSpec {

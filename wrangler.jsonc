@@ -5,73 +5,94 @@
 // the composer at zero connected workers), so everything here scales to zero:
 // containers only run while there is pending or in-flight agent work.
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cursor-pool-workers",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-07-01",
-  "observability": { "enabled": true },
-
-  "containers": [
-    {
-      "class_name": "CursorPoolWorker",
-      "image": "./container/Dockerfile",
-      // Upper bound on concurrently running containers across ALL pools.
-      // Keep >= sum over pools of maxWorkers, plus 1 for pool broadcasts.
-      "max_instances": 10,
-      // "standard-1" = 1/2 vCPU, 4 GiB memory, 8 GB disk. Agents doing real
-      // builds may want a larger instance type (standard-2/-3/-4).
-      "instance_type": "standard-1"
-    }
-  ],
-
-  "durable_objects": {
-    "bindings": [
-      { "name": "POOL_SCHEDULER", "class_name": "PoolScheduler" },
-      { "name": "POOL_WORKER", "class_name": "CursorPoolWorker" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PoolScheduler", "CursorPoolWorker"] }
-  ],
-
-  // Post-clone repo snapshots live here so container boots skip full clones.
-  "r2_buckets": [
-    { "binding": "REPO_SNAPSHOTS", "bucket_name": "cursor-pool-worker-snapshots" }
-  ],
-
-  // Safety net that (re)starts the scheduler's alarm loop. The Durable Object
-  // alarm does the actual sub-minute polling.
-  "triggers": { "crons": ["* * * * *"] },
-
-  "vars": {
-    // JSON array of pools this deployment serves. Each pool has a name and an
-    // optional list of repo clone URLs the pool's workers broadcast. A pool
-    // with no repos serves any repository the pending request references.
-    "POOLS": "[{\"name\":\"default\",\"repos\":[]}]",
-
-    // Cursor fleet-management API (list pending requests, pools, workers).
-    "CURSOR_API_URL": "https://api.cursor.com",
-    // Endpoint the cursor-agent worker process connects to from containers.
-    "CURSOR_AGENT_ENDPOINT": "https://api2.cursor.sh",
-
-    // Per-pool concurrency: number of container slots per pool.
-    "MAX_WORKERS_PER_POOL": "3",
-    // Seconds an idle claimed worker stays connected before exiting (which
-    // stops the container -> scale to zero).
-    "WORKER_IDLE_RELEASE_TIMEOUT_SECONDS": "300",
-    // Scheduler poll cadence, seconds.
-    "POLL_INTERVAL_SECONDS": "20",
-    // Snapshots older than this are rebuilt from a fresh clone.
-    "SNAPSHOT_MAX_AGE_SECONDS": "604800"
-  }
-
-  // Required secrets (set with `wrangler secret put <NAME>`):
-  //   CURSOR_API_KEY        Cursor team service-account API key (agent scope).
-  // Optional secrets:
-  //   GIT_USERNAME          Username for cloning private repos over HTTPS
-  //                         (e.g. "x-access-token" for GitHub PATs).
-  //   GIT_TOKEN             Token/password for cloning private repos.
-  //   ADMIN_TOKEN           Bearer token protecting /status and /tick.
-  //   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
-  //                         routes. Defaults to CURSOR_API_KEY when unset.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cursor-pool-workers",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-01",
+	"observability": {
+		"enabled": true
+	},
+	"containers": [
+		{
+			"class_name": "CursorPoolWorker",
+			"image": "./container/Dockerfile",
+			// Upper bound on concurrently running containers across ALL pools.
+			// Keep >= sum over pools of maxWorkers, plus 1 for pool broadcasts.
+			"max_instances": 10,
+			// "standard-1" = 1/2 vCPU, 4 GiB memory, 8 GB disk. Agents doing real
+			// builds may want a larger instance type (standard-2/-3/-4).
+			"instance_type": "standard-1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "POOL_SCHEDULER",
+				"class_name": "PoolScheduler"
+			},
+			{
+				"name": "POOL_WORKER",
+				"class_name": "CursorPoolWorker"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"PoolScheduler",
+				"CursorPoolWorker"
+			]
+		}
+	],
+	// Post-clone repo snapshots live here so container boots skip full clones.
+	"r2_buckets": [
+		{
+			"binding": "REPO_SNAPSHOTS",
+			"bucket_name": "cursor-pool-worker-snapshots"
+		},
+		{
+			"bucket_name": "cursor-pool-worker-snapshots",
+			"binding": "cursor_pool_worker_snapshots",
+			"remote": true
+		}
+	],
+	// Safety net that (re)starts the scheduler's alarm loop. The Durable Object
+	// alarm does the actual sub-minute polling.
+	"triggers": {
+		"crons": [
+			"* * * * *"
+		]
+	},
+	"vars": {
+		// JSON array of pools this deployment serves. Each pool has a name and an
+		// optional list of repo clone URLs the pool's workers broadcast. A pool
+		// with no repos serves any repository the pending request references.
+		"POOLS": "[{\"name\":\"cloudflare-test\",\"repos\":[\"https://github.com/pisa-engine/BMP.git\"]}]",
+		// Cursor fleet-management API (list pending requests, pools, workers).
+		"CURSOR_API_URL": "https://api.cursor.com",
+		// Endpoint the cursor-agent worker process connects to from containers.
+		"CURSOR_AGENT_ENDPOINT": "https://api2.cursor.sh",
+		// Per-pool concurrency: number of container slots per pool.
+		"MAX_WORKERS_PER_POOL": "3",
+		// Warm floor: keep this many containers connected per pool so the pool
+		// stays selectable in the Cursor UI. Set to "0" to scale fully to zero.
+		"MIN_WORKERS_PER_POOL": "1",
+		// Seconds an idle claimed (serve-mode) worker stays connected before
+		// exiting. Warm-floor workers ignore this and stay up (idle-release 0).
+		"WORKER_IDLE_RELEASE_TIMEOUT_SECONDS": "300",
+		// Scheduler poll cadence, seconds.
+		"POLL_INTERVAL_SECONDS": "20",
+		// Snapshots older than this are rebuilt from a fresh clone.
+		"SNAPSHOT_MAX_AGE_SECONDS": "604800"
+	}
+	// Required secrets (set with `wrangler secret put <NAME>`):
+	//   CURSOR_API_KEY        Cursor team service-account API key (agent scope).
+	// Optional secrets:
+	//   GIT_USERNAME          Username for cloning private repos over HTTPS
+	//                         (e.g. "x-access-token" for GitHub PATs).
+	//   GIT_TOKEN             Token/password for cloning private repos.
+	//   ADMIN_TOKEN           Bearer token protecting /status and /tick.
+	//   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
+	//                         routes. Defaults to CURSOR_API_KEY when unset.
 }

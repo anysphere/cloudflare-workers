@@ -3,6 +3,7 @@ import {
   containerNameForSlot,
   LAUNCH_COOLDOWN_MS,
   planLaunches,
+  planWarmLaunches,
   poolNameFromRequest,
   repoKeyFromUrl,
   repoUrlsForLaunch,
@@ -254,5 +255,82 @@ describe("planLaunches", () => {
     expect(launches).toHaveLength(1);
     expect(launches[0]?.spec.poolName).toBe("gpu");
     expect(launches[0]?.containerName).toBe(containerNameForSlot("gpu", 0));
+  });
+});
+
+describe("planWarmLaunches", () => {
+  const pinned = pool({
+    name: "cloudflare-test",
+    repos: ["https://github.com/acme/payments"],
+  });
+
+  it("keeps a warm floor of 1 when no slots are running", () => {
+    const launches = planWarmLaunches({
+      pools: [pinned],
+      slotsByPool: new Map(),
+      reservedContainerNames: new Set(),
+      defaultMinWorkersPerPool: 1,
+      defaultMaxWorkersPerPool: 3,
+      nowMs: NOW,
+    });
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.spec.mode).toBe("warm");
+    expect(launches[0]?.spec.repoUrls).toEqual(pinned.repos);
+    expect(launches[0]?.containerName).toBe(
+      containerNameForSlot("cloudflare-test", 0)
+    );
+  });
+
+  it("does nothing when the warm floor is already met", () => {
+    const launches = planWarmLaunches({
+      pools: [pinned],
+      slotsByPool: new Map([
+        ["cloudflare-test", [{ slotIndex: 0, running: true }]],
+      ]),
+      reservedContainerNames: new Set(),
+      defaultMinWorkersPerPool: 1,
+      defaultMaxWorkersPerPool: 3,
+      nowMs: NOW,
+    });
+    expect(launches).toHaveLength(0);
+  });
+
+  it("skips slots reserved for serve launches this tick", () => {
+    const launches = planWarmLaunches({
+      pools: [pinned],
+      slotsByPool: new Map(),
+      reservedContainerNames: new Set([
+        containerNameForSlot("cloudflare-test", 0),
+      ]),
+      defaultMinWorkersPerPool: 1,
+      defaultMaxWorkersPerPool: 3,
+      nowMs: NOW,
+    });
+    // Slot 0 is reserved (counts toward the floor), so no warm launch needed.
+    expect(launches).toHaveLength(0);
+  });
+
+  it("skips pools with no repos", () => {
+    const launches = planWarmLaunches({
+      pools: [pool({ repos: [] })],
+      slotsByPool: new Map(),
+      reservedContainerNames: new Set(),
+      defaultMinWorkersPerPool: 1,
+      defaultMaxWorkersPerPool: 3,
+      nowMs: NOW,
+    });
+    expect(launches).toHaveLength(0);
+  });
+
+  it("honors minWorkers=0 to allow scale-to-zero", () => {
+    const launches = planWarmLaunches({
+      pools: [pool({ ...pinned, minWorkers: 0 })],
+      slotsByPool: new Map(),
+      reservedContainerNames: new Set(),
+      defaultMinWorkersPerPool: 1,
+      defaultMaxWorkersPerPool: 3,
+      nowMs: NOW,
+    });
+    expect(launches).toHaveLength(0);
   });
 });

@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseNonNegativeInt,
   parsePoolsConfig,
   parsePositiveInt,
   poolConfigFingerprint,
 } from "../src/config";
 
 describe("parsePoolsConfig", () => {
-  it("parses pools with names, repos and maxWorkers", () => {
+  it("parses pools with names, repos, maxWorkers and minWorkers", () => {
     const pools = parsePoolsConfig(
       JSON.stringify([
-        { name: "default", repos: ["https://github.com/acme/a"] },
-        { name: "gpu", maxWorkers: 5 },
+        { name: "default", repos: ["https://github.com/acme/a"], minWorkers: 1 },
+        { name: "gpu", maxWorkers: 5, minWorkers: 0 },
       ])
     );
     expect(pools).toEqual([
@@ -18,8 +19,9 @@ describe("parsePoolsConfig", () => {
         name: "default",
         repos: ["https://github.com/acme/a"],
         maxWorkers: undefined,
+        minWorkers: 1,
       },
-      { name: "gpu", repos: [], maxWorkers: 5 },
+      { name: "gpu", repos: [], maxWorkers: 5, minWorkers: 0 },
     ]);
   });
 
@@ -62,6 +64,15 @@ describe("parsePositiveInt", () => {
     expect(parsePositiveInt("", 3)).toBe(3);
     expect(parsePositiveInt("-1", 3)).toBe(3);
     expect(parsePositiveInt("2.5", 3)).toBe(3);
+  });
+});
+
+describe("parseNonNegativeInt", () => {
+  it("accepts zero and falls back on invalid input", () => {
+    expect(parseNonNegativeInt("0", 1)).toBe(0);
+    expect(parseNonNegativeInt("2", 1)).toBe(2);
+    expect(parseNonNegativeInt("-1", 1)).toBe(1);
+    expect(parseNonNegativeInt(undefined, 1)).toBe(1);
   });
 });
 
