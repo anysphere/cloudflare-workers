@@ -1,4 +1,7 @@
-# Canonical tasks. See .cursor/skills/devex/mise-monorepo-tasks/SKILL.md.
+# Tool versions + canonical tasks.
+
+[tools]
+node = "22"
 
 [tasks.build]
 description = "Validate wrangler config and build the container image (dry-run deploy; needs Docker)"
