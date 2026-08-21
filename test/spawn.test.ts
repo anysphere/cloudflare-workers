@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -191,7 +191,7 @@ describe("spawn.sh", () => {
             reject(new Error("no address"));
             return;
           }
-          const result = spawnSync("bash", [script], {
+          const child = spawn("bash", [script], {
             cwd: repoRoot,
             env: {
               ...baseEnv,
@@ -201,9 +201,14 @@ describe("spawn.sh", () => {
               CURSOR_POOL: "gpu",
               CURSOR_REPO_URL: "https://github.com/acme/payments",
             },
-            encoding: "utf8",
           });
-          server.close(() => resolve(result.status ?? 1));
+          child.on("error", (error) => {
+            server.close();
+            reject(error);
+          });
+          child.on("exit", (code) => {
+            server.close(() => resolve(code ?? 1));
+          });
         });
       });
       expect(exitCode).toBe(testCase.exit);
