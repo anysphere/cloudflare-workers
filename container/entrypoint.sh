@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # Boots one Cursor pool worker inside a Cloudflare container.
 #
-# Environment (set per-launch by the CursorPoolWorker Durable Object):
-#   CURSOR_API_KEY                     team service-account API key (required;
-#                                      read directly by the cursor-agent CLI)
-#   CURSOR_WORKER_POOL_NAME            pool to register into (required)
-#   CURSOR_WORKER_NAME                 worker display name
+# Environment (set per-launch by POST /spawn via the CursorPoolWorker DO):
+#   CURSOR_API_KEY                     team service-account API key (required)
+#   CURSOR_POOL                        pool to register into (required)
+#   CURSOR_WORKER_NAME                 worker display name (controller sets this
+#                                      to CURSOR_AGENT_WORKER_ID)
+#   CURSOR_AGENT_WORKER_ID             stable worker id to register with
+#   CURSOR_REPO_URL                    clone URL for --worker-dir (required)
+#   CURSOR_API_ENDPOINT                optional agent/bridge URL (from wrangler
+#                                      CURSOR_AGENT_ENDPOINT, not the fleet API)
 #   CURSOR_WORKER_IDLE_RELEASE_TIMEOUT idle seconds before the worker exits 0
-#   CURSOR_AGENT_ENDPOINT              cursor-agent endpoint override
-#   LAUNCH_MODE                        "serve" or "broadcast" (logging only —
-#                                      broadcast just uses a short idle timeout)
-#   REPO_URLS                          newline-separated clone URLs to check out
-#                                      and broadcast (may be empty)
 #   GIT_USERNAME / GIT_TOKEN           HTTPS clone credentials (optional)
-#   SNAPSHOT_BASE_URL                  Worker snapshot route base (optional;
-#                                      unset disables the clone cache)
+#   SNAPSHOT_BASE_URL                  Worker snapshot route base (optional)
 #   SNAPSHOT_AUTH_TOKEN                bearer token for the snapshot routes
 #   SNAPSHOT_MAX_AGE_SECONDS           rebuild snapshots older than this
 #   SNAPSHOT_MAX_BYTES                 skip uploading tarballs larger than this
@@ -23,9 +21,9 @@ set -euo pipefail
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
 
 : "${CURSOR_API_KEY:?CURSOR_API_KEY is required}"
-: "${CURSOR_WORKER_POOL_NAME:?CURSOR_WORKER_POOL_NAME is required}"
+: "${CURSOR_POOL:?CURSOR_POOL is required}"
+: "${CURSOR_REPO_URL:?CURSOR_REPO_URL is required}"
 
-LAUNCH_MODE="${LAUNCH_MODE:-serve}"
 SNAPSHOT_MAX_AGE_SECONDS="${SNAPSHOT_MAX_AGE_SECONDS:-604800}"
 # Snapshot uploads stream through the Worker, so they are subject to the
 # Cloudflare plan's request-body limit (100 MB free / 200 MB paid / 500 MB
@@ -115,23 +113,8 @@ restore_or_clone() {
   fi
 }
 
-worker_dir_args=()
-index=0
-while IFS= read -r repo_url; do
-  [[ -z "$repo_url" ]] && continue
-  dir="$WORKSPACES_DIR/repo-$index"
-  restore_or_clone "$repo_url" "$dir"
-  worker_dir_args+=(--worker-dir "$dir")
-  index=$((index + 1))
-done <<< "${REPO_URLS:-}"
-
-if (( ${#worker_dir_args[@]} == 0 )); then
-  # The scheduler never launches without repos (current cursor-agent releases
-  # require a git checkout with an origin remote per worker dir), but keep a
-  # clear failure message in case a fork relaxes that.
-  log "no repos to check out; a pool worker needs at least one repo"
-  exit 1
-fi
+worker_dir="$WORKSPACES_DIR/repo-0"
+restore_or_clone "$CURSOR_REPO_URL" "$worker_dir"
 
 AGENT_BIN="$(command -v agent || command -v cursor-agent || true)"
 if [[ -z "$AGENT_BIN" ]]; then
@@ -139,14 +122,10 @@ if [[ -z "$AGENT_BIN" ]]; then
   exit 1
 fi
 
-endpoint_args=()
-if [[ -n "${CURSOR_AGENT_ENDPOINT:-}" ]]; then
-  endpoint_args=(--endpoint "$CURSOR_AGENT_ENDPOINT")
-fi
-
-log "starting pool worker: mode=$LAUNCH_MODE pool=$CURSOR_WORKER_POOL_NAME repos=$index"
-# Pool name, display name, idle-release timeout, and the API key all flow in
-# via their CURSOR_* environment variables, which the CLI reads natively.
-exec "$AGENT_BIN" "${endpoint_args[@]}" \
-  worker "${worker_dir_args[@]}" --pool \
+log "starting pool worker: pool=$CURSOR_POOL repo=$CURSOR_REPO_URL"
+# Pool name, display name, idle-release timeout, worker id, and the API key
+# all flow in via their CURSOR_* environment variables, which the CLI reads
+# natively. --pool <name> is the non-deprecated form of CURSOR_POOL.
+exec "$AGENT_BIN" \
+  worker --worker-dir "$worker_dir" --pool "$CURSOR_POOL" \
   start --verbose

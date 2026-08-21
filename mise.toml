@@ -8,7 +8,7 @@ description = "Validate wrangler config and build the container image (dry-run d
 run = "npx wrangler deploy --dry-run"
 
 [tasks.test]
-description = "Run the scheduler/matching/config unit tests with vitest"
+description = "Run spawn/config unit tests with vitest"
 run = "npm test"
 
 [tasks.lint]
