@@ -10,7 +10,7 @@ import { snapshotAuthToken, type Env } from "./env";
  * treated as a best-effort cache: entries older than SNAPSHOT_MAX_AGE_SECONDS
  * are rebuilt from a fresh clone by the entrypoint.
  *
- * Routes (bearer auth with SNAPSHOT_AUTH_TOKEN, falling back to the API key):
+ * Routes (bearer auth with SNAPSHOT_AUTH_TOKEN, falling back to SPAWN_TOKEN):
  *   HEAD /internal/snapshots/<key>  – existence + x-snapshot-created-at header
  *   GET  /internal/snapshots/<key>  – tarball stream
  *   PUT  /internal/snapshots/<key>  – upload tarball
@@ -28,8 +28,12 @@ export async function handleSnapshotRequest(
   env: Env,
   key: string
 ): Promise<Response> {
+  const token = snapshotAuthToken(env);
+  if (token === undefined) {
+    return unauthorized();
+  }
   const authorization = request.headers.get("Authorization") ?? "";
-  if (authorization !== `Bearer ${snapshotAuthToken(env)}`) {
+  if (authorization !== `Bearer ${token}`) {
     return unauthorized();
   }
   if (!KEY_PATTERN.test(key)) {

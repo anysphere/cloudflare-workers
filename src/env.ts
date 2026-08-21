@@ -1,33 +1,24 @@
 import type { CursorPoolWorker } from "./container";
-import type { PoolScheduler } from "./scheduler";
 
 export interface Env {
-  // Bindings (wrangler.jsonc)
-  POOL_SCHEDULER: DurableObjectNamespace<PoolScheduler>;
   POOL_WORKER: DurableObjectNamespace<CursorPoolWorker>;
   REPO_SNAPSHOTS: R2Bucket;
 
-  // Secrets
-  /** Cursor team service-account API key. Required. */
-  CURSOR_API_KEY: string;
+  /** Bearer token protecting POST /spawn (and optional admin stop). Required for spawn. */
+  SPAWN_TOKEN?: string;
   /** HTTPS clone username for private repos (e.g. "x-access-token"). */
   GIT_USERNAME?: string;
   /** HTTPS clone token/password for private repos. */
   GIT_TOKEN?: string;
-  /** Bearer token protecting the /status and /tick admin routes. */
-  ADMIN_TOKEN?: string;
-  /** Bearer token for snapshot routes; defaults to CURSOR_API_KEY. */
+  /** Bearer token for snapshot routes; defaults to SPAWN_TOKEN. */
   SNAPSHOT_AUTH_TOKEN?: string;
-
-  // Vars
-  POOLS: string;
-  CURSOR_API_URL?: string;
+  /**
+   * Optional guest agent/bridge URL (e.g. https://api2.cursor.sh). When unset
+   * the in-container CLI uses its own default. Do not set this to the fleet
+   * API (api.cursor.com) — that is CURSOR_API_ENDPOINT on the controller side.
+   */
   CURSOR_AGENT_ENDPOINT?: string;
-  MAX_WORKERS_PER_POOL?: string;
-  /** Warm floor per pool. Default 1; set 0 to scale fully to zero when idle. */
-  MIN_WORKERS_PER_POOL?: string;
   WORKER_IDLE_RELEASE_TIMEOUT_SECONDS?: string;
-  POLL_INTERVAL_SECONDS?: string;
   SNAPSHOT_MAX_AGE_SECONDS?: string;
   /**
    * Public URL of this Worker (https://<name>.<account>.workers.dev or a
@@ -39,6 +30,10 @@ export interface Env {
   MAX_RUN_LIFETIME_SECONDS?: string;
 }
 
-export function snapshotAuthToken(env: Env): string {
-  return env.SNAPSHOT_AUTH_TOKEN ?? env.CURSOR_API_KEY;
+export function spawnAuthToken(env: Env): string | undefined {
+  return env.SPAWN_TOKEN;
+}
+
+export function snapshotAuthToken(env: Env): string | undefined {
+  return env.SNAPSHOT_AUTH_TOKEN ?? env.SPAWN_TOKEN;
 }

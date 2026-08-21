@@ -1,39 +1,24 @@
 /**
  * Worker entrypoint.
  *
- *   - cron (`scheduled`) keeps the PoolScheduler's alarm loop armed;
- *   - `fetch` exposes a tiny admin surface plus the internal snapshot cache
- *     the containers use to skip full clones.
+ *   - POST /spawn starts a container for one claimed private-worker request
+ *     (called by spawn.sh from `agent worker controller --spawn`);
+ *   - snapshot routes let containers skip a full clone on boot.
  *
- * The heavy lifting lives in the two Durable Object classes exported below.
+ * Poll, claim, and pool matching live in the agent CLI controller — not here.
  */
 import { getContainer } from "@cloudflare/containers";
-import type { Env } from "./env";
-import { containerNameForSlot } from "./matching";
+import { spawnAuthToken, type Env } from "./env";
 import { handleSnapshotRequest } from "./snapshots";
+import {
+  containerNameForSpawn,
+  guestEnvFromSpawn,
+  parseSpawnBody,
+  requireGuestSpawnEnv,
+  SpawnRequestError,
+} from "./spawn";
 
-export { PoolScheduler } from "./scheduler";
 export { CursorPoolWorker } from "./container";
-
-const SCHEDULER_INSTANCE = "scheduler";
-
-function schedulerStub(env: Env) {
-  return env.POOL_SCHEDULER.get(env.POOL_SCHEDULER.idFromName(SCHEDULER_INSTANCE));
-}
-
-function requireAdmin(request: Request, env: Env): Response | undefined {
-  if (env.ADMIN_TOKEN === undefined) {
-    return new Response(
-      "admin routes disabled: set the ADMIN_TOKEN secret to enable them",
-      { status: 403 }
-    );
-  }
-  const authorization = request.headers.get("Authorization") ?? "";
-  if (authorization !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return new Response("unauthorized", { status: 401 });
-  }
-  return undefined;
-}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -42,14 +27,34 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-export default {
-  async scheduled(_controller, env): Promise<void> {
-    await schedulerStub(env).ensureRunning();
-  },
+function requireSpawnAuth(request: Request, env: Env): Response | undefined {
+  const token = spawnAuthToken(env);
+  if (token === undefined) {
+    return new Response(
+      "spawn disabled: set the SPAWN_TOKEN secret to enable POST /spawn",
+      { status: 403 }
+    );
+  }
+  const authorization = request.headers.get("Authorization") ?? "";
+  if (authorization !== `Bearer ${token}`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  return undefined;
+}
 
+function pathnameOf(request: Request): string {
+  const url = request.url;
+  const schemeEnd = url.indexOf("://");
+  const pathStart = url.indexOf("/", schemeEnd === -1 ? 0 : schemeEnd + 3);
+  const pathAndQuery = pathStart === -1 ? "/" : url.slice(pathStart);
+  const queryStart = pathAndQuery.indexOf("?");
+  const path = queryStart === -1 ? pathAndQuery : pathAndQuery.slice(0, queryStart);
+  return path.replace(/\/+$/, "") || "/";
+}
+
+export default {
   async fetch(request, env): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const path = pathnameOf(request);
 
     if (path === "/" || path === "/health") {
       return json({ ok: true, service: "cursor-pool-workers" });
@@ -60,39 +65,55 @@ export default {
       return handleSnapshotRequest(request, env, snapshotMatch[1]);
     }
 
-    if (path === "/status" && request.method === "GET") {
-      const denied = requireAdmin(request, env);
+    if (path === "/spawn" && request.method === "POST") {
+      const denied = requireSpawnAuth(request, env);
       if (denied !== undefined) {
         return denied;
       }
-      return json(await schedulerStub(env).getStatus());
+      try {
+        const body: unknown = await request.json();
+        const guestEnv = guestEnvFromSpawn(parseSpawnBody(body));
+        requireGuestSpawnEnv(guestEnv);
+        const containerName = containerNameForSpawn(guestEnv);
+        const stub = getContainer(env.POOL_WORKER, containerName);
+        const result = await stub.spawnGuest(guestEnv);
+        console.log(
+          `spawn ${containerName} pool=${guestEnv.CURSOR_POOL ?? "-"} ` +
+            `request=${guestEnv.CURSOR_REQUEST_ID ?? "-"} started=${result.started} state=${result.state}`
+        );
+        return json({
+          started: result.started,
+          state: result.state,
+          containerName,
+        });
+      } catch (error) {
+        if (error instanceof SpawnRequestError) {
+          return json({ error: error.message }, error.status);
+        }
+        console.error(`spawn failed: ${String(error)}`);
+        return json({ error: String(error) }, 500);
+      }
     }
 
-    if (path === "/tick" && request.method === "POST") {
-      const denied = requireAdmin(request, env);
+    if (path === "/stop" && request.method === "POST") {
+      const denied = requireSpawnAuth(request, env);
       if (denied !== undefined) {
         return denied;
       }
-      const summary = await schedulerStub(env).tick();
-      await schedulerStub(env).ensureRunning();
-      return json(summary);
-    }
-
-    // Admin: force-stop one container slot, e.g. POST /slots/default/0/stop
-    const slotStopMatch = path.match(/^\/slots\/([^/]+)\/(\d+)\/stop$/);
-    if (slotStopMatch !== null && request.method === "POST") {
-      const denied = requireAdmin(request, env);
-      if (denied !== undefined) {
-        return denied;
+      try {
+        const body: unknown = await request.json();
+        const guestEnv = guestEnvFromSpawn(parseSpawnBody(body));
+        const containerName = containerNameForSpawn(guestEnv);
+        const stub = getContainer(env.POOL_WORKER, containerName);
+        await stub.stopWorker();
+        return json({ stopped: containerName });
+      } catch (error) {
+        if (error instanceof SpawnRequestError) {
+          return json({ error: error.message }, error.status);
+        }
+        console.error(`stop failed: ${String(error)}`);
+        return json({ error: String(error) }, 500);
       }
-      const [, poolName, slotIndex] = slotStopMatch;
-      if (poolName === undefined || slotIndex === undefined) {
-        return new Response("not found", { status: 404 });
-      }
-      const containerName = containerNameForSlot(poolName, Number(slotIndex));
-      const stub = getContainer(env.POOL_WORKER, containerName);
-      await stub.stopWorker();
-      return json({ stopped: containerName });
     }
 
     return new Response("not found", { status: 404 });

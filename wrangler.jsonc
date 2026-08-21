@@ -1,9 +1,8 @@
 // Cursor self-hosted pool workers on Cloudflare Containers.
 //
-// One deployment of this Worker schedules containers for any number of Cursor
-// worker pools. Pools are durable on the Cursor side (they stay selectable in
-// the composer at zero connected workers), so everything here scales to zero:
-// containers only run while there is pending or in-flight agent work.
+// This Worker does not poll Cursor. `agent worker controller --spawn` claims
+// work and POSTs /spawn; each call starts one container that runs
+// `cursor-agent worker start --pool`.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "cursor-pool-workers",
@@ -16,8 +15,7 @@
 		{
 			"class_name": "CursorPoolWorker",
 			"image": "./container/Dockerfile",
-			// Upper bound on concurrently running containers across ALL pools.
-			// Keep >= sum over pools of maxWorkers, plus 1 for pool broadcasts.
+			// Upper bound on concurrently running containers.
 			"max_instances": 10,
 			// "standard-1" = 1/2 vCPU, 4 GiB memory, 8 GB disk. Agents doing real
 			// builds may want a larger instance type (standard-2/-3/-4).
@@ -26,10 +24,6 @@
 	],
 	"durable_objects": {
 		"bindings": [
-			{
-				"name": "POOL_SCHEDULER",
-				"class_name": "PoolScheduler"
-			},
 			{
 				"name": "POOL_WORKER",
 				"class_name": "CursorPoolWorker"
@@ -42,6 +36,12 @@
 			"new_sqlite_classes": [
 				"PoolScheduler",
 				"CursorPoolWorker"
+			]
+		},
+		{
+			"tag": "v2",
+			"deleted_classes": [
+				"PoolScheduler"
 			]
 		}
 	],
@@ -57,42 +57,23 @@
 			"remote": true
 		}
 	],
-	// Safety net that (re)starts the scheduler's alarm loop. The Durable Object
-	// alarm does the actual sub-minute polling.
-	"triggers": {
-		"crons": [
-			"* * * * *"
-		]
-	},
 	"vars": {
-		// JSON array of pools this deployment serves. Each pool has a name and an
-		// optional list of repo clone URLs the pool's workers broadcast. A pool
-		// with no repos serves any repository the pending request references.
-		"POOLS": "[{\"name\":\"cloudflare-test\",\"repos\":[\"https://github.com/pisa-engine/BMP.git\"]}]",
-		// Cursor fleet-management API (list pending requests, pools, workers).
-		"CURSOR_API_URL": "https://api.cursor.com",
-		// Endpoint the cursor-agent worker process connects to from containers.
+		// Endpoint the in-container CLI connects to (agent/bridge). Leave unset
+		// to use the CLI default. This is not the fleet API (api.cursor.com).
 		"CURSOR_AGENT_ENDPOINT": "https://api2.cursor.sh",
-		// Per-pool concurrency: number of container slots per pool.
-		"MAX_WORKERS_PER_POOL": "3",
-		// Warm floor: keep this many containers connected per pool so the pool
-		// stays selectable in the Cursor UI. Set to "0" to scale fully to zero.
-		"MIN_WORKERS_PER_POOL": "1",
-		// Seconds an idle claimed (serve-mode) worker stays connected before
-		// exiting. Warm-floor workers ignore this and stay up (idle-release 0).
+		// Seconds an idle claimed worker stays connected before exiting.
 		"WORKER_IDLE_RELEASE_TIMEOUT_SECONDS": "300",
-		// Scheduler poll cadence, seconds.
-		"POLL_INTERVAL_SECONDS": "20",
 		// Snapshots older than this are rebuilt from a fresh clone.
 		"SNAPSHOT_MAX_AGE_SECONDS": "604800"
 	}
 	// Required secrets (set with `wrangler secret put <NAME>`):
-	//   CURSOR_API_KEY        Cursor team service-account API key (agent scope).
+	//   SPAWN_TOKEN           Bearer token for POST /spawn (spawn.sh).
 	// Optional secrets:
 	//   GIT_USERNAME          Username for cloning private repos over HTTPS
 	//                         (e.g. "x-access-token" for GitHub PATs).
 	//   GIT_TOKEN             Token/password for cloning private repos.
-	//   ADMIN_TOKEN           Bearer token protecting /status and /tick.
 	//   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
-	//                         routes. Defaults to CURSOR_API_KEY when unset.
+	//                         routes. Defaults to SPAWN_TOKEN when unset.
+	// Optional vars:
+	//   WORKER_PUBLIC_URL     Public URL of this Worker; enables snapshot cache.
 }
