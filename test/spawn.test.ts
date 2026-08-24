@@ -109,7 +109,7 @@ describe("requireGuestSpawnEnv", () => {
     expect(() => requireGuestSpawnEnv(valid)).not.toThrow();
   });
 
-  it("requires api key, pool, and repo url", () => {
+  it("requires api key and pool; repo url is optional (any-repo)", () => {
     expect(() =>
       requireGuestSpawnEnv({
         CURSOR_POOL: valid.CURSOR_POOL,
@@ -124,7 +124,7 @@ describe("requireGuestSpawnEnv", () => {
     ).toThrow(/CURSOR_POOL/);
     expect(() =>
       requireGuestSpawnEnv({ CURSOR_API_KEY: "k", CURSOR_POOL: "gpu" })
-    ).toThrow(/CURSOR_REPO_URL/);
+    ).not.toThrow();
   });
 });
 

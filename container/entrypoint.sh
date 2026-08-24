@@ -10,7 +10,8 @@
 #   CURSOR_WORKER_NAME                 worker display name (controller sets this
 #                                      to CURSOR_AGENT_WORKER_ID)
 #   CURSOR_AGENT_WORKER_ID             stable worker id to register with
-#   CURSOR_REPO_URL                    clone URL for --worker-dir (required)
+#   CURSOR_REPO_URL                    clone URL for repo-bound --worker-dir
+#                                      (omit for any-repo: no git remote)
 #   CURSOR_API_ENDPOINT                optional agent/bridge URL (from wrangler
 #                                      CURSOR_AGENT_ENDPOINT, not the fleet API)
 #   CURSOR_WORKER_IDLE_RELEASE_TIMEOUT idle seconds before the worker exits 0
@@ -52,7 +53,6 @@ fi
 
 : "${CURSOR_API_KEY:?CURSOR_API_KEY is required}"
 : "${CURSOR_POOL:?CURSOR_POOL is required}"
-: "${CURSOR_REPO_URL:?CURSOR_REPO_URL is required}"
 
 SNAPSHOT_MAX_AGE_SECONDS="${SNAPSHOT_MAX_AGE_SECONDS:-604800}"
 # Snapshot uploads stream through the Worker, so they are subject to the
@@ -144,9 +144,13 @@ restore_or_clone() {
 }
 
 worker_dir="$WORKSPACES_DIR/repo-0"
-restore_or_clone "$CURSOR_REPO_URL" "$worker_dir"
-
-log "starting pool worker: pool=$CURSOR_POOL repo=$CURSOR_REPO_URL"
+if [[ -n "${CURSOR_REPO_URL:-}" ]]; then
+  restore_or_clone "$CURSOR_REPO_URL" "$worker_dir"
+  log "starting repo-bound pool worker: pool=$CURSOR_POOL repo=$CURSOR_REPO_URL"
+else
+  mkdir -p "$worker_dir"
+  log "starting any-repo pool worker: pool=$CURSOR_POOL (no git remote)"
+fi
 # Pool name, display name, idle-release timeout, worker id, and the API key
 # all flow in via their CURSOR_* environment variables, which the CLI reads
 # natively. --pool <name> is the non-deprecated form of CURSOR_POOL.

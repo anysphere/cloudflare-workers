@@ -29,10 +29,6 @@ if [[ -z "${CURSOR_POOL:-}" ]]; then
   log "CURSOR_POOL is missing; the controller should inject it from the claimed request"
   exit 2
 fi
-if [[ -z "${CURSOR_REPO_URL:-}" ]]; then
-  log "CURSOR_REPO_URL is missing; this template needs a git checkout per worker"
-  exit 2
-fi
 
 encode_payload() {
   if command -v python3 >/dev/null 2>&1; then

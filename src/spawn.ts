@@ -81,12 +81,6 @@ export function requireGuestSpawnEnv(guestEnv: Record<string, string>): void {
       "spawn requires CURSOR_POOL (the controller sets this from the claimed request)"
     );
   }
-  if (guestEnv.CURSOR_REPO_URL === undefined) {
-    throw new SpawnRequestError(
-      400,
-      "spawn requires CURSOR_REPO_URL (cursor-agent needs a git checkout per worker dir)"
-    );
-  }
 }
 
 /** HTTP statuses the spawn hook should treat as retryable (exit 1). */
