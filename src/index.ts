@@ -1,7 +1,7 @@
 /**
  * Worker entrypoint.
  *
- * Cron (every minute) runs the controller: list pending requests for the pool,
+ * Cron (every 5 minutes) runs the controller: list pending requests for the pool,
  * watch the SSE stream, claim, and start one guest container per claim.
  * HTTP serves /health and the container<->R2 snapshot cache.
  */

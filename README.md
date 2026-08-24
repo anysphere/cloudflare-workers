@@ -2,16 +2,16 @@
 
 This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted-pool) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
 
-The Worker itself is the controller. A cron trigger fires every minute; each run lists pending requests for your pool, holds the pending-requests **SSE stream** open, claims each request, and starts one guest container per claim. There is no controller binary, no long-running controller container, and no state outside Cursor's claim API.
+The Worker itself is the controller. A cron trigger fires every five minutes; each run lists pending requests for your pool, holds the pending-requests **SSE stream** open until the next run is due, claims each request, and starts one guest container per claim. There is no controller binary, no long-running controller container, and no state outside Cursor's claim API.
 
 Product routing is documented in the [self-hosted pool guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots)). This template supports both [repo-bound](#run-a-repo-bound-agent) and [any-repo](#run-an-any-repo-agent) starts.
 
 ## How it works
 
 1. You start an agent at [cursor.com/agents](https://cursor.com/agents) and choose **Self-hosted**. Cursor records a pending private-worker request.
-2. Every minute the cron runs [`src/controller.ts`](src/controller.ts):
+2. Every five minutes the cron runs [`src/controller.ts`](src/controller.ts):
    - `GET /v0/private-workers/pending-requests?pool=<CURSOR_POOL>` — claims anything already waiting and returns a `streamCursor`.
-   - `GET /v0/private-workers/pending-requests/stream?pool=…&cursor=…` — stays open for ~50 s and claims each `created` event as it arrives. A `410` (expired cursor) re-lists; a closed stream reconnects from the last event id.
+   - `GET /v0/private-workers/pending-requests/stream?pool=…&cursor=…` — stays open for ~4m50s (`CONTROLLER_RUN_BUDGET_MS`) and claims each `created` event as it arrives, so coverage is continuous across runs. A `410` (expired cursor) re-lists; a closed stream reconnects from the last event id.
 3. `POST /v0/private-workers/claim` with a fresh `cf-<uuid>` worker id is the only mutex. `409` means another controller won; `404` means the request is gone. Overlapping cron runs are harmless.
 4. On a successful claim the Worker starts a guest `CursorPoolWorker` container named `spawn/<workerId>` with the `CURSOR_*` env for that request. If the claim has a repo, `CURSOR_REPO_URL` is set and the guest clones (or restores an R2 snapshot). If not, the guest starts from an empty workspace with **no git remote**.
 5. The guest runs `agent worker --worker-dir <dir> --pool <name> start` as a long-lived outbound bridge. Cursor keeps driving the agent loop.
@@ -70,7 +70,7 @@ The image installs the current prod CLI with `curl -fsSL https://cursor.com/inst
 
 Keep `containers[].max_instances` at least the number of concurrent claimed runs you expect. Watch containers with `npx wrangler containers list` and the controller with `npx wrangler tail`.
 
-To run one controller pass locally: `npx wrangler dev --test-scheduled` and then `curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"`.
+To run one controller pass locally: `npx wrangler dev --test-scheduled` and then `curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"`. To change the interval, edit `triggers.crons` in `wrangler.jsonc` and `CONTROLLER_RUN_BUDGET_MS` in [`src/config.ts`](src/config.ts) together.
 
 ## Run a repo-bound agent
 
@@ -110,7 +110,7 @@ If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `-
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Nothing is ever claimed | Cron not firing, `CURSOR_API_KEY` unset, or `CURSOR_POOL` does not match the dashboard pool | `npx wrangler tail`; look for `controller[<pool>]: run done` every minute and any `HTTP 401`. |
+| Nothing is ever claimed | Cron not firing, `CURSOR_API_KEY` unset, or `CURSOR_POOL` does not match the dashboard pool | `npx wrangler tail`; look for `controller[<pool>]: run done` every five minutes and any `HTTP 401`. |
 | `HTTP 401` in the controller log | Personal key, or a service-account key without agent scope | Put a team service-account key with agent scope as `CURSOR_API_KEY`. |
 | Agent cannot find the pool under a repo | You started [any-repo](#run-an-any-repo-agent) (no `repo=` labels) | Pick the **Any repo** group, or start [repo-bound](#run-a-repo-bound-agent) so the guest clones and advertises `repo=`. |
 | Claimed but the agent never starts | Guest container failed to boot (`max_instances` reached, clone failed, bad `GIT_TOKEN`) | `npx wrangler containers list`; check `container stopped` lines in `wrangler tail`. The run errors out on Cursor's side after its claim wait. |

@@ -1,6 +1,6 @@
 // Cursor self-hosted pool workers on Cloudflare Containers.
 //
-// A cron run every minute lists and SSE-watches pending requests for
+// A cron run every five minutes lists and SSE-watches pending requests for
 // CURSOR_POOL, claims them, and starts one guest container per claim.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -11,7 +11,9 @@
 		"enabled": true
 	},
 	"triggers": {
-		"crons": ["* * * * *"]
+		// Each run holds the SSE stream for CONTROLLER_RUN_BUDGET_MS (~4m50s),
+		// so back-to-back runs give continuous coverage.
+		"crons": ["*/5 * * * *"]
 	},
 	"containers": [
 		{

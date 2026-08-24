@@ -2,8 +2,9 @@
  * In-Worker pool controller.
  *
  * One run: list pending private-worker requests for the pool, claim each, then
- * hold the SSE stream open (Last-Event-ID resume) and claim `created` events
- * until the time budget is spent. The cron trigger starts the next run.
+ * hold the SSE stream open (resuming from the last event id) and claim
+ * `created` events until the time budget is spent. The cron trigger starts the
+ * next run.
  *
  * POST /claim is the only mutex. It is atomic on the server: 409 means another
  * controller got there first, 404 means the request is gone. Overlapping runs
