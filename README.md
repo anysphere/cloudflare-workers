@@ -108,7 +108,7 @@ The worker omits `repo=` labels. The pool name on the guest must match the contr
 
 If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `--worker-dir`, **that session becomes repo-bound**. To stay any-repo, keep `--worker-dir` as a directory with no git remote and let the agent or a hook clone into it.
 
-## CLI versions
+## CLI versions (TODO: Remove before publishing)
 
 | Channel | Version (today) | `worker controller` | Usable here? |
 | --- | --- | --- | --- |
