@@ -2,7 +2,7 @@
   "name": "cursor-pool-workers-on-cloudflare",
   "version": "0.1.0",
   "private": true,
-  "description": "Template: spawn Cursor self-hosted pool workers on Cloudflare Containers via agent worker controller --spawn",
+  "description": "Template: run agent worker controller --spawn in a Cloudflare Container, and start one guest container per claim",
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",

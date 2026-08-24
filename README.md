@@ -2,14 +2,14 @@
 
 This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted-pool) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
 
-You deploy a spawn-only Worker. The shared CLI (`agent worker controller --spawn`) polls Cursor, claims work, and calls this repo’s `spawn.sh`. This Worker does not poll pending requests or claim jobs.
+After deploy, one container runs `agent worker controller --spawn ./spawn.sh`. That is the same CLI as the [AWS Lambda template](https://github.com/anysphere/aws-lambda-workers). The Worker isolate cannot run the binary; the container can. Cron (and `/health`) keep that controller container up.
 
 ## How it works
 
 1. You start an agent at [cursor.com/agents](https://cursor.com/agents) and choose **Self-hosted**. For a [repo-bound](#repo-bound-mode) pool, pick the repo (the pool appears under that repo). For an [any-repo](#any-repo-mode) pool, pick the **Any repo** group and the pool name. Cursor records a pending private-worker request.
-2. `agent worker controller --spawn` polls for that request, claims it, and execs `spawn.sh` with `CURSOR_*` in the environment.
+2. The controller container runs `agent worker controller --spawn /home/worker/spawn.sh --pool <CURSOR_POOL>`. The CLI polls, claims, and execs [`container/spawn.sh`](container/spawn.sh).
 3. `spawn.sh` `POST`s `/spawn` on this Worker and returns as soon as Cloudflare accepts the start. Exit **0** means spawned, **1** retryable, **2+** fatal.
-4. A `CursorPoolWorker` container starts. As shipped, it clones `CURSOR_REPO_URL` (required by `spawn.sh` and the entrypoint). If `WORKER_PUBLIC_URL` is set, it may restore a post-clone tarball from R2 first. [`src/snapshots.ts`](src/snapshots.ts) is that optional boot cache for repo-bound clones, not the controller.
+4. A guest `CursorPoolWorker` container starts. As shipped, it clones `CURSOR_REPO_URL` (required by `spawn.sh` and the entrypoint). If `WORKER_PUBLIC_URL` is set, it may restore a post-clone tarball from R2 first. [`src/snapshots.ts`](src/snapshots.ts) is that optional boot cache for repo-bound clones, not the controller.
 5. The guest runs `agent worker --worker-dir <clone> --pool <name> start` as a long-lived outbound bridge. Cursor keeps driving the agent loop. Starting from that git remote makes the session [repo-bound](#repo-bound-mode).
 6. When the worker is idle for `WORKER_IDLE_RELEASE_TIMEOUT_SECONDS` (default 300), the guest exits and the container stops.
 
@@ -17,8 +17,9 @@ You deploy a spawn-only Worker. The shared CLI (`agent worker controller --spawn
 
 | Property | Description |
 | --- | --- |
+| **Controller in a container** | `agent worker controller --spawn` runs inside Cloudflare, not on a laptop. |
 | **Containers isolation** | Each spawn is one Cloudflare Container. Checkouts and processes are not shared with other runs. |
-| **Durable Object** | `CursorPoolWorker` owns a single container. `POST /spawn` starts it and returns; it does not wait for `cursor-agent`. |
+| **Durable Object** | `CursorPoolWorker` owns a single container. The instance named `controller` is the CLI; `POST /spawn` starts a guest. |
 | **R2 snapshots** | Optional post-clone cache for [repo-bound](#repo-bound-mode) boots, keyed by the clone URL. A miss is a cold `git clone`, not a failure. Skip the cache if a cold clone every boot is fine. |
 | **Outbound-only worker** | The guest opens an outbound connection to Cursor. This template does not expose inbound ports on the container. |
 
@@ -27,11 +28,8 @@ You deploy a spawn-only Worker. The shared CLI (`agent worker controller --spawn
 - A Cloudflare account with Workers, Containers, and R2 (Workers Paid).
 - Node 20 or later. Docker if you build the container image locally; Wrangler builds it on `npx wrangler deploy`.
 - A Cursor **service-account API key** with agent scope. Pool workers reject personal API keys.
-- The agent CLI with `worker controller`. If `agent worker controller` is missing, install the [lab CLI](https://cursor.com/install?channel=lab) — prod `cursor.com/install` may still be too old:
 
-```bash
-curl https://cursor.com/install?channel=lab -fsS | bash
-```
+The image pins a **lab** CLI in [`container/cursor-agent-version`](container/cursor-agent-version). Prod `cursor.com/install` (2026.08.04 and earlier) has no `worker controller` subcommand. See [CLI versions](#cli-versions).
 
 ## Deploy
 
@@ -49,25 +47,20 @@ curl https://cursor.com/install?channel=lab -fsS | bash
    npx wrangler r2 bucket create cursor-pool-worker-snapshots
    ```
 
-3. Put secrets. `SPAWN_TOKEN` is required.
+3. Put secrets.
 
    ```bash
+   npx wrangler secret put CURSOR_API_KEY       # team service-account key
    npx wrangler secret put SPAWN_TOKEN          # bearer for POST /spawn
    npx wrangler secret put GIT_USERNAME         # optional: e.g. x-access-token
    npx wrangler secret put GIT_TOKEN            # optional: PAT for private repos
    npx wrangler secret put SNAPSHOT_AUTH_TOKEN  # optional: defaults to SPAWN_TOKEN
    ```
 
-   | Credential | Where | Purpose |
-   | --- | --- | --- |
-   | `SPAWN_TOKEN` | Wrangler secret | Bearer token for `POST /spawn` and `POST /stop`. |
-   | `CLOUDFLARE_SPAWN_TOKEN` | Controller host env | Same value as `SPAWN_TOKEN`. |
-   | `CLOUDFLARE_WORKER_URL` | Controller host env | Deployed Worker URL. `spawn.sh` POSTs `{url}/spawn`. |
-   | `CURSOR_API_KEY` | Controller (`--api-key` or env) | Service-account key. The controller injects it into `spawn.sh`; the guest uses it to register. |
-   | `GIT_USERNAME` / `GIT_TOKEN` | Optional Wrangler secrets | HTTPS clone of private repos. Injected at runtime via an in-memory credential helper — never written to disk, never stored in snapshots. |
-   | `SNAPSHOT_AUTH_TOKEN` | Optional Wrangler secret | Container ↔ Worker snapshot routes. Defaults to `SPAWN_TOKEN`. |
+4. In `wrangler.jsonc`, set:
 
-4. In `wrangler.jsonc`, set `vars.WORKER_PUBLIC_URL` to the URL this Worker will have (for example `https://cursor-pool-workers.<account>.workers.dev`) so container boots can use the snapshot cache.
+   - `vars.CURSOR_POOL` to the pool name you will select in the dashboard (default `default`). Comma-separate to watch more than one name. Do not use `--all-pools` on a shared team account.
+   - `vars.WORKER_PUBLIC_URL` to the URL this Worker will have (for example `https://cursor-pool-workers.<account>.workers.dev`). The controller POSTs `/spawn` here; it also enables the snapshot cache.
 
 5. Deploy.
 
@@ -75,22 +68,15 @@ curl https://cursor.com/install?channel=lab -fsS | bash
    npx wrangler deploy
    ```
 
-Keep `containers[].max_instances` in `wrangler.jsonc` at least as large as the number of concurrent claimed runs you expect. `GET /health` is public. `POST /spawn` and `POST /stop` require `Authorization: Bearer <SPAWN_TOKEN>`.
+Keep `containers[].max_instances` at least **1 +** the number of concurrent claimed runs you expect (one slot is the controller). `GET /health` is public and also wakes the controller. `POST /spawn` and `POST /stop` require `Authorization: Bearer <SPAWN_TOKEN>`.
 
 ## Run a cloud agent
 
-1. Keep a controller running for the pool you will select:
+1. Open [cursor.com/agents](https://cursor.com/agents).
+2. Start an agent. For [repo-bound mode](#repo-bound-mode), pick the repo and choose **Self-hosted** with the `CURSOR_POOL` name. For [any-repo mode](#any-repo-mode), pick the **Any repo** group and the pool name (`pool=<name>` on Slack/GitHub/Linear, or API `env.type: "pool"` + `env.name` with `repos` omitted).
+3. Watch containers with `npx wrangler containers list`.
 
-   ```bash
-   agent worker controller --spawn ./spawn.sh --pool <name>
-   ```
-
-   `--pool` is required unless you pass `--all-pools`. Repeat `--pool` to watch more than one name. The pool name on the guest must match the controller.
-2. Open [cursor.com/agents](https://cursor.com/agents).
-3. Start an agent. For [repo-bound mode](#repo-bound-mode), pick the repo and choose **Self-hosted** with that pool name. For [any-repo mode](#any-repo-mode), pick the **Any repo** group and the pool name (`pool=<name>` on Slack/GitHub/Linear, or API `env.type: "pool"` + `env.name` with `repos` omitted).
-4. Watch containers with `npx wrangler containers list`.
-
-As shipped, the guest clones `CURSOR_REPO_URL` on boot, then connects outbound from that git checkout. If the controller is not running, the dashboard request stays pending.
+As shipped, the guest clones `CURSOR_REPO_URL` on boot, then connects outbound from that git checkout.
 
 ## Pool and repo modes
 
@@ -110,13 +96,13 @@ Dashboard: **Any repo**. Docs: [repo-less](https://cursor.com/docs/cloud-agent/s
 
 Routing is by **pool name**, not by git remote. Users must specify the pool name(s) when starting an agent (dashboard **Any repo** group, `pool=<name>` on Slack/GitHub/Linear, or API `env.type: "pool"` + `env.name`, omit `repos`).
 
-Controller:
+Controller (this is what the in-container process runs):
 
 ```bash
 agent worker controller --spawn ./spawn.sh --pool <name>
 ```
 
-Repeat `--pool` for several names.
+Repeat `--pool` for several names (`CURSOR_POOL=a,b` in `wrangler.jsonc`).
 
 Guest — `<dir>` has **no git remote**, so the worker omits `repo=` labels. The pool name on the guest must match the controller:
 
@@ -138,42 +124,30 @@ Multi-root: the public CLI accepts repeated `--worker-dir` (up to 20); the first
 
 Users pick the repo in the dashboard (the pool appears under that repo). Pool name is optional extra routing.
 
-## How the template works
+## CLI versions
 
-This repo only starts a container. The CLI is the controller.
+| Channel | Version (today) | `worker controller` | Usable here? |
+| --- | --- | --- | --- |
+| Prod `cursor.com/install` | `2026.08.04-aaa8809` | No | No. The binary has no controller subcommand. |
+| Lab `downloads.cursor.com/lab/…` | `2026.08.21-4bf0f61` | Yes | Pin this in `cursor-agent-version`. It still rejects extra pending-request fields — see below. |
 
-- **Poll** — `agent worker controller --spawn` polls Cursor for pending private-worker requests and claims them. This Worker does not call `GET /v0/private-workers/pending-requests` or `POST .../claim`.
-- **Start** — `spawn.sh` `POST`s `/spawn`. The Durable Object starts one container. The entrypoint restores or clones `CURSOR_REPO_URL`, then execs `agent worker --worker-dir <clone> --pool <name> start` (repo-bound).
-- **Terminate** — idle-release exits the guest (default 300s). `MAX_RUN_LIFETIME_SECONDS` (default 8h) force-stops a wedged container. `POST /stop` is an authenticated admin stop.
+`curl https://cursor.com/install?channel=lab` currently installs the same `2026.08.21-4bf0f61` build. There is no newer published lab tarball to pin.
 
-## Alternative: run the controller locally
-
-On a machine that can reach the deployed Worker:
-
-```bash
-export CURSOR_API_KEY=...                    # service-account key
-export CLOUDFLARE_WORKER_URL=https://cursor-pool-workers.<account>.workers.dev
-export CLOUDFLARE_SPAWN_TOKEN=...            # same value as SPAWN_TOKEN
-
-chmod +x spawn.sh
-agent worker controller --spawn ./spawn.sh --pool default
-```
-
-(`cursor-agent worker controller` is the same binary.) The controller injects `CURSOR_REQUEST_ID`, `CURSOR_BC_ID`, `CURSOR_REPO_URL`, `CURSOR_REPO_OWNER`, `CURSOR_REPO_NAME`, `CURSOR_USER_ID`, `CURSOR_POOL`, `CURSOR_WORKER_NAME`, `CURSOR_API_URL` / `CURSOR_API_ENDPOINT`, `CURSOR_API_KEY`, and `CURSOR_AGENT_WORKER_ID`. `spawn.sh` forwards every `CURSOR_*` field and returns immediately — it does not wait for `cursor-agent`.
+That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict** schema. Production now returns `repoUrls` (and other extras). The controller then exits with `Unrecognized key(s) in object: 'repoUrls'` and will not claim. This is a CLI bug, not something this template can fix by wrapping the API. When a lab (or prod) build ships that ignores unknown keys, bump [`container/cursor-agent-version`](container/cursor-agent-version) and redeploy.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Worker never connects | Controller not running, or `--pool` does not match the dashboard pool | Start `agent worker controller --spawn ./spawn.sh --pool <name>`. Use `--all-pools` or repeat `--pool` for more than one name. |
+| Worker never connects | Controller container not running, or `CURSOR_POOL` does not match the dashboard pool | Hit `/health`, check `wrangler tail`, confirm `CURSOR_API_KEY` and `WORKER_PUBLIC_URL`. |
+| Controller logs `Unrecognized key(s) in object: 'repoUrls'` | Lab CLI `2026.08.21` strict-parses pending-requests | Wait for a CLI that ignores unknown keys; bump `cursor-agent-version`. |
 | `spawn.sh` exits 2 (`CURSOR_REPO_URL is missing`) | This template requires a clone URL on the claimed request | Start a [repo-bound](#repo-bound-mode) agent (pick the repo). As shipped, `spawn.sh` and the entrypoint do not stay [any-repo](#any-repo-mode). |
-| `POST /spawn` returns 401 | `CLOUDFLARE_SPAWN_TOKEN` does not match the Worker `SPAWN_TOKEN` | Re-put `SPAWN_TOKEN` and export the same value as `CLOUDFLARE_SPAWN_TOKEN`. |
-| Snapshot miss / slow first boot | No R2 object yet, stale snapshot, or `WORKER_PUBLIC_URL` unset | Expected for [repo-bound](#repo-bound-mode). The guest does a cold clone. Set `vars.WORKER_PUBLIC_URL` and redeploy to enable the cache. |
-| `agent worker controller` not found | Prod install is too old | `curl https://cursor.com/install?channel=lab -fsS \| bash` |
+| `POST /spawn` returns 401 | `SPAWN_TOKEN` does not match what the controller container was given | Re-put `SPAWN_TOKEN` and redeploy so the controller picks up the new secret. |
+| Snapshot miss / slow first boot | No R2 object yet, stale snapshot, or `WORKER_PUBLIC_URL` unset | Expected for [repo-bound](#repo-bound-mode). The guest does a cold clone. |
 
 ## Related resources
 
 - [Cloudflare Containers](https://developers.cloudflare.com/containers/)
 - [Cursor self-hosted pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots))
-- [`spawn.sh`](spawn.sh) — spawn hook the controller execs
+- [`container/spawn.sh`](container/spawn.sh) — spawn hook the controller execs
 - [`wrangler.jsonc`](wrangler.jsonc) — Worker, Container, Durable Object, and R2 bindings

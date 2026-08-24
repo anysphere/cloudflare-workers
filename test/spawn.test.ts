@@ -139,9 +139,9 @@ describe("isRetryableSpawnStatus", () => {
   });
 });
 
-describe("spawn.sh", () => {
+describe("container/spawn.sh", () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-  const script = join(repoRoot, "spawn.sh");
+  const script = join(repoRoot, "container/spawn.sh");
   const baseEnv = {
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? "",

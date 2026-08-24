@@ -1,5 +1,6 @@
 import { Container } from "@cloudflare/containers";
 import {
+  DEFAULT_CURSOR_POOL,
   DEFAULT_IDLE_RELEASE_TIMEOUT_SECONDS,
   DEFAULT_MAX_RUN_LIFETIME_SECONDS,
   parsePositiveInt,
@@ -8,6 +9,7 @@ import { snapshotAuthToken, type Env } from "./env";
 
 const LAUNCHED_AT_STORAGE_KEY = "launched-at-ms";
 const GUEST_ENV_STORAGE_KEY = "guest-env";
+const ROLE_STORAGE_KEY = "role";
 
 export interface WorkerSlotStatus {
   readonly running: boolean;
@@ -16,16 +18,27 @@ export interface WorkerSlotStatus {
 }
 
 /**
- * One container instance. The image runs a single
- * `cursor-agent worker start --pool` process (see container/entrypoint.sh).
- * When that process exits, the container stops. The Durable Object itself is
- * free while stopped.
+ * One container instance. Named `controller` runs
+ * `agent worker controller --spawn`. Every other name is a guest
+ * `cursor-agent worker start --pool` process.
  */
 export class CursorPoolWorker extends Container<Env> {
-  // No ports: the workload is an outbound-only bridge connection to Cursor.
-  // sleepAfter is a watchdog interval, not a lifetime: onActivityExpired
-  // re-arms it until MAX_RUN_LIFETIME_SECONDS, then force-stops.
+  // No ports: outbound-only. sleepAfter is a watchdog interval, not a
+  // lifetime: onActivityExpired re-arms it (forever for the controller;
+  // until MAX_RUN_LIFETIME_SECONDS for guests).
   override sleepAfter = "30m";
+
+  /** Keep `agent worker controller --spawn` running on this instance. */
+  async startController(): Promise<{ started: boolean; state: string }> {
+    const state = await this.getState();
+    if (state.status === "running" || state.status === "healthy") {
+      return { started: false, state: state.status };
+    }
+    await this.ctx.storage.put(ROLE_STORAGE_KEY, "controller");
+    await this.ctx.storage.put(LAUNCHED_AT_STORAGE_KEY, Date.now());
+    await this.start({ envVars: this.controllerEnvVars() });
+    return { started: true, state: (await this.getState()).status };
+  }
 
   /**
    * Start (or confirm) this instance's worker process. Returns after the
@@ -38,6 +51,7 @@ export class CursorPoolWorker extends Container<Env> {
     if (state.status === "running" || state.status === "healthy") {
       return { started: false, state: state.status };
     }
+    await this.ctx.storage.put(ROLE_STORAGE_KEY, "guest");
     await this.ctx.storage.put(GUEST_ENV_STORAGE_KEY, guestEnv);
     await this.ctx.storage.put(LAUNCHED_AT_STORAGE_KEY, Date.now());
     await this.start({ envVars: this.buildEnvVars(guestEnv) });
@@ -75,10 +89,15 @@ export class CursorPoolWorker extends Container<Env> {
   }
 
   /**
-   * Keep long agent runs alive across sleepAfter windows, but enforce a hard
-   * lifetime ceiling so a wedged process cannot burn container hours forever.
+   * The controller stays up for the life of the deploy. Guests renew until
+   * MAX_RUN_LIFETIME_SECONDS, then force-stop.
    */
   override async onActivityExpired(): Promise<void> {
+    const role = await this.ctx.storage.get<string>(ROLE_STORAGE_KEY);
+    if (role === "controller") {
+      this.renewActivityTimeout();
+      return;
+    }
     const launchedAtMs =
       (await this.ctx.storage.get<number>(LAUNCHED_AT_STORAGE_KEY)) ?? 0;
     const maxLifetimeMs =
@@ -94,6 +113,16 @@ export class CursorPoolWorker extends Container<Env> {
     await this.stop();
   }
 
+  private controllerEnvVars(): Record<string, string> {
+    return {
+      CURSOR_ROLE: "controller",
+      CURSOR_API_KEY: this.env.CURSOR_API_KEY ?? "",
+      CURSOR_POOL: this.env.CURSOR_POOL ?? DEFAULT_CURSOR_POOL,
+      CLOUDFLARE_WORKER_URL: this.env.WORKER_PUBLIC_URL ?? "",
+      CLOUDFLARE_SPAWN_TOKEN: this.env.SPAWN_TOKEN ?? "",
+    };
+  }
+
   private buildEnvVars(guestEnv: Record<string, string>): Record<string, string> {
     const idleReleaseTimeoutSeconds = parsePositiveInt(
       this.env.WORKER_IDLE_RELEASE_TIMEOUT_SECONDS,
@@ -101,6 +130,7 @@ export class CursorPoolWorker extends Container<Env> {
     );
     const envVars: Record<string, string> = {
       ...guestEnv,
+      CURSOR_ROLE: "guest",
       CURSOR_WORKER_IDLE_RELEASE_TIMEOUT: String(idleReleaseTimeoutSeconds),
       SNAPSHOT_MAX_AGE_SECONDS: this.env.SNAPSHOT_MAX_AGE_SECONDS ?? "",
     };

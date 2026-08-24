@@ -1,14 +1,12 @@
 /**
  * Worker entrypoint.
  *
- *   - POST /spawn starts a container for one claimed private-worker request
- *     (called by spawn.sh from `agent worker controller --spawn`);
- *   - snapshot routes let containers skip a full clone on boot.
- *
- * Poll, claim, and pool matching live in the agent CLI controller — not here.
+ * Cron (and /health) keep one container running
+ * `agent worker controller --spawn`. That CLI claims work and POSTs /spawn,
+ * which starts a guest container per request.
  */
 import { getContainer } from "@cloudflare/containers";
-import { spawnAuthToken, type Env } from "./env";
+import { CONTROLLER_CONTAINER_NAME, spawnAuthToken, type Env } from "./env";
 import { handleSnapshotRequest } from "./snapshots";
 import {
   containerNameForSpawn,
@@ -52,11 +50,21 @@ function pathnameOf(request: Request): string {
   return path.replace(/\/+$/, "") || "/";
 }
 
+function startController(env: Env): Promise<{ started: boolean; state: string }> {
+  return getContainer(env.POOL_WORKER, CONTROLLER_CONTAINER_NAME).startController();
+}
+
 export default {
-  async fetch(request, env): Promise<Response> {
+  async scheduled(_controller, env): Promise<void> {
+    const result = await startController(env);
+    console.log(`controller started=${result.started} state=${result.state}`);
+  },
+
+  async fetch(request, env, ctx): Promise<Response> {
     const path = pathnameOf(request);
 
     if (path === "/" || path === "/health") {
+      ctx.waitUntil(startController(env));
       return json({ ok: true, service: "cursor-pool-workers" });
     }
 

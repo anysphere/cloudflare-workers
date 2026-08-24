@@ -1,8 +1,7 @@
 // Cursor self-hosted pool workers on Cloudflare Containers.
 //
-// This Worker does not poll Cursor. `agent worker controller --spawn` claims
-// work and POSTs /spawn; each call starts one container that runs
-// `cursor-agent worker start --pool`.
+// Cron keeps one container running `agent worker controller --spawn`.
+// That CLI claims work and POSTs /spawn; each call starts one guest container.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "cursor-pool-workers",
@@ -11,11 +10,14 @@
 	"observability": {
 		"enabled": true
 	},
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
 	"containers": [
 		{
 			"class_name": "CursorPoolWorker",
 			"image": "./container/Dockerfile",
-			// Upper bound on concurrently running containers.
+			// Upper bound on concurrently running containers (controller + guests).
 			"max_instances": 10,
 			// "standard-1" = 1/2 vCPU, 4 GiB memory, 8 GB disk. Agents doing real
 			// builds may want a larger instance type (standard-2/-3/-4).
@@ -58,8 +60,11 @@
 		}
 	],
 	"vars": {
-		// Endpoint the in-container CLI connects to (agent/bridge). Leave unset
-		// to use the CLI default. This is not the fleet API (api.cursor.com).
+		// Pool the in-container controller watches (`--pool`). Repeat names
+		// as a comma-separated list. Do not use --all-pools on a shared team.
+		"CURSOR_POOL": "default",
+		// Endpoint the in-container guest CLI connects to (agent/bridge).
+		// Leave unset to use the CLI default. Not the fleet API.
 		"CURSOR_AGENT_ENDPOINT": "https://api2.cursor.sh",
 		// Seconds an idle claimed worker stays connected before exiting.
 		"WORKER_IDLE_RELEASE_TIMEOUT_SECONDS": "300",
@@ -67,6 +72,7 @@
 		"SNAPSHOT_MAX_AGE_SECONDS": "604800"
 	}
 	// Required secrets (set with `wrangler secret put <NAME>`):
+	//   CURSOR_API_KEY        Team service-account key (controller + guests).
 	//   SPAWN_TOKEN           Bearer token for POST /spawn (spawn.sh).
 	// Optional secrets:
 	//   GIT_USERNAME          Username for cloning private repos over HTTPS
@@ -74,6 +80,7 @@
 	//   GIT_TOKEN             Token/password for cloning private repos.
 	//   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
 	//                         routes. Defaults to SPAWN_TOKEN when unset.
-	// Optional vars:
-	//   WORKER_PUBLIC_URL     Public URL of this Worker; enables snapshot cache.
+	// Required vars:
+	//   WORKER_PUBLIC_URL     Public URL of this Worker. The controller POSTs
+	//                         /spawn here; also enables the snapshot cache.
 }

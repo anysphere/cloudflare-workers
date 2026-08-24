@@ -3,7 +3,7 @@
 #
 # The controller claims a pending private-worker request, then execs this
 # script with CURSOR_* in the environment. We ask Cloudflare to start one
-# container and return — do not wait for cursor-agent to finish.
+# guest container and return — do not wait for cursor-agent to finish.
 #
 # Exit codes (CLI contract):
 #   0  spawned (or already running)

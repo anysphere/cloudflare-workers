@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Boots one Cursor pool worker inside a Cloudflare container.
+# Container entrypoint.
 #
-# Environment (set per-launch by POST /spawn via the CursorPoolWorker DO):
+# CURSOR_ROLE=controller  — `agent worker controller --spawn ./spawn.sh`
+# anything else           — guest `cursor-agent worker start --pool`
+#
+# Guest environment (set per-launch by POST /spawn):
 #   CURSOR_API_KEY                     team service-account API key (required)
 #   CURSOR_POOL                        pool to register into (required)
 #   CURSOR_WORKER_NAME                 worker display name (controller sets this
@@ -19,6 +22,33 @@
 set -euo pipefail
 
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
+
+AGENT_BIN="$(command -v agent || command -v cursor-agent || true)"
+if [[ -z "$AGENT_BIN" ]]; then
+  log "cursor-agent CLI not found on PATH"
+  exit 1
+fi
+
+if [[ "${CURSOR_ROLE:-}" == "controller" ]]; then
+  : "${CURSOR_API_KEY:?CURSOR_API_KEY is required}"
+  : "${CURSOR_POOL:?CURSOR_POOL is required}"
+  : "${CLOUDFLARE_WORKER_URL:?CLOUDFLARE_WORKER_URL is required}"
+  : "${CLOUDFLARE_SPAWN_TOKEN:?CLOUDFLARE_SPAWN_TOKEN is required}"
+  if ! "$AGENT_BIN" worker controller --help >/dev/null 2>&1; then
+    log "this CLI has no 'worker controller' ($("$AGENT_BIN" --version 2>/dev/null || echo unknown))"
+    log "prod cursor.com/install is too old; pin a lab version in cursor-agent-version"
+    exit 1
+  fi
+  log "starting controller: pool=$CURSOR_POOL spawn=/home/worker/spawn.sh"
+  # shellcheck disable=SC2206
+  pools=(${CURSOR_POOL//,/ })
+  pool_args=()
+  for pool in "${pools[@]}"; do
+    [[ -n "$pool" ]] || continue
+    pool_args+=(--pool "$pool")
+  done
+  exec "$AGENT_BIN" worker controller --spawn /home/worker/spawn.sh "${pool_args[@]}"
+fi
 
 : "${CURSOR_API_KEY:?CURSOR_API_KEY is required}"
 : "${CURSOR_POOL:?CURSOR_POOL is required}"
@@ -115,12 +145,6 @@ restore_or_clone() {
 
 worker_dir="$WORKSPACES_DIR/repo-0"
 restore_or_clone "$CURSOR_REPO_URL" "$worker_dir"
-
-AGENT_BIN="$(command -v agent || command -v cursor-agent || true)"
-if [[ -z "$AGENT_BIN" ]]; then
-  log "cursor-agent CLI not found on PATH"
-  exit 1
-fi
 
 log "starting pool worker: pool=$CURSOR_POOL repo=$CURSOR_REPO_URL"
 # Pool name, display name, idle-release timeout, worker id, and the API key
