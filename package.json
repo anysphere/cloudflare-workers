@@ -2,7 +2,7 @@
   "name": "cursor-pool-workers-on-cloudflare",
   "version": "0.1.0",
   "private": true,
-  "description": "Template: run agent worker controller --spawn in a Cloudflare Container, and start one guest container per claim",
+  "description": "Template: a Cloudflare Worker cron that SSE-watches and claims Cursor pool requests, starting one container per claim",
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",

@@ -1,4 +1,4 @@
-import { snapshotAuthToken, type Env } from "./env";
+import type { Env } from "./env";
 
 /**
  * R2-backed snapshot cache for post-clone repo state.
@@ -10,7 +10,7 @@ import { snapshotAuthToken, type Env } from "./env";
  * treated as a best-effort cache: entries older than SNAPSHOT_MAX_AGE_SECONDS
  * are rebuilt from a fresh clone by the entrypoint.
  *
- * Routes (bearer auth with SNAPSHOT_AUTH_TOKEN, falling back to SPAWN_TOKEN):
+ * Routes (bearer auth with the SNAPSHOT_AUTH_TOKEN secret; 401 when unset):
  *   HEAD /internal/snapshots/<key>  – existence + x-snapshot-created-at header
  *   GET  /internal/snapshots/<key>  – tarball stream
  *   PUT  /internal/snapshots/<key>  – upload tarball
@@ -28,7 +28,7 @@ export async function handleSnapshotRequest(
   env: Env,
   key: string
 ): Promise<Response> {
-  const token = snapshotAuthToken(env);
+  const token = env.SNAPSHOT_AUTH_TOKEN;
   if (token === undefined) {
     return unauthorized();
   }

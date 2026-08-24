@@ -1,44 +1,21 @@
 /**
  * Worker entrypoint.
  *
- * Cron (and /health) keep one container running
- * `agent worker controller --spawn`. That CLI claims work and POSTs /spawn,
- * which starts a guest container per request.
+ * Cron (every minute) runs the controller: list pending requests for the pool,
+ * watch the SSE stream, claim, and start one guest container per claim.
+ * HTTP serves /health and the container<->R2 snapshot cache.
  */
 import { getContainer } from "@cloudflare/containers";
-import { CONTROLLER_CONTAINER_NAME, spawnAuthToken, type Env } from "./env";
-import { handleSnapshotRequest } from "./snapshots";
 import {
-  containerNameForSpawn,
-  guestEnvFromSpawn,
-  parseSpawnBody,
-  requireGuestSpawnEnv,
-  SpawnRequestError,
-} from "./spawn";
+  CONTROLLER_RUN_BUDGET_MS,
+  DEFAULT_CURSOR_API_URL,
+  DEFAULT_CURSOR_POOL,
+} from "./config";
+import { guestEnvForClaim, runController } from "./controller";
+import type { Env } from "./env";
+import { handleSnapshotRequest } from "./snapshots";
 
 export { CursorPoolWorker } from "./container";
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function requireSpawnAuth(request: Request, env: Env): Response | undefined {
-  const token = spawnAuthToken(env);
-  if (token === undefined) {
-    return new Response(
-      "spawn disabled: set the SPAWN_TOKEN secret to enable POST /spawn",
-      { status: 403 }
-    );
-  }
-  const authorization = request.headers.get("Authorization") ?? "";
-  if (authorization !== `Bearer ${token}`) {
-    return new Response("unauthorized", { status: 401 });
-  }
-  return undefined;
-}
 
 function pathnameOf(request: Request): string {
   const url = request.url;
@@ -50,78 +27,45 @@ function pathnameOf(request: Request): string {
   return path.replace(/\/+$/, "") || "/";
 }
 
-function startController(env: Env): Promise<{ started: boolean; state: string }> {
-  return getContainer(env.POOL_WORKER, CONTROLLER_CONTAINER_NAME).startController();
-}
-
 export default {
   async scheduled(_controller, env): Promise<void> {
-    const result = await startController(env);
-    console.log(`controller started=${result.started} state=${result.state}`);
+    const apiKey = env.CURSOR_API_KEY;
+    if (apiKey === undefined) {
+      console.error("CURSOR_API_KEY secret is not set; controller idle");
+      return;
+    }
+    const pool = env.CURSOR_POOL ?? DEFAULT_CURSOR_POOL;
+    const summary = await runController({
+      apiUrl: env.CURSOR_API_URL ?? DEFAULT_CURSOR_API_URL,
+      apiKey,
+      pool,
+      budgetMs: CONTROLLER_RUN_BUDGET_MS,
+      log: (message) => console.log(`controller[${pool}]: ${message}`),
+      spawn: async (request, workerId) => {
+        const result = await getContainer(env.POOL_WORKER, `spawn/${workerId}`).spawnGuest(
+          guestEnvForClaim(request, workerId, apiKey)
+        );
+        console.log(
+          `spawn ${workerId} request=${request.id} repo=${request.repoUrl ?? "-"} ` +
+            `started=${result.started} state=${result.state}`
+        );
+      },
+    });
+    console.log(
+      `controller[${pool}]: run done listed=${summary.listed} claimed=${summary.claimed}`
+    );
   },
 
-  async fetch(request, env, ctx): Promise<Response> {
+  async fetch(request, env): Promise<Response> {
     const path = pathnameOf(request);
 
     if (path === "/" || path === "/health") {
-      ctx.waitUntil(startController(env));
-      return json({ ok: true, service: "cursor-pool-workers" });
+      return Response.json({ ok: true, service: "cursor-pool-workers" });
     }
 
     const snapshotMatch = path.match(/^\/internal\/snapshots\/([^/]+)$/);
     if (snapshotMatch !== null && snapshotMatch[1] !== undefined) {
       return handleSnapshotRequest(request, env, snapshotMatch[1]);
-    }
-
-    if (path === "/spawn" && request.method === "POST") {
-      const denied = requireSpawnAuth(request, env);
-      if (denied !== undefined) {
-        return denied;
-      }
-      try {
-        const body: unknown = await request.json();
-        const guestEnv = guestEnvFromSpawn(parseSpawnBody(body));
-        requireGuestSpawnEnv(guestEnv);
-        const containerName = containerNameForSpawn(guestEnv);
-        const stub = getContainer(env.POOL_WORKER, containerName);
-        const result = await stub.spawnGuest(guestEnv);
-        console.log(
-          `spawn ${containerName} pool=${guestEnv.CURSOR_POOL ?? "-"} ` +
-            `request=${guestEnv.CURSOR_REQUEST_ID ?? "-"} started=${result.started} state=${result.state}`
-        );
-        return json({
-          started: result.started,
-          state: result.state,
-          containerName,
-        });
-      } catch (error) {
-        if (error instanceof SpawnRequestError) {
-          return json({ error: error.message }, error.status);
-        }
-        console.error(`spawn failed: ${String(error)}`);
-        return json({ error: String(error) }, 500);
-      }
-    }
-
-    if (path === "/stop" && request.method === "POST") {
-      const denied = requireSpawnAuth(request, env);
-      if (denied !== undefined) {
-        return denied;
-      }
-      try {
-        const body: unknown = await request.json();
-        const guestEnv = guestEnvFromSpawn(parseSpawnBody(body));
-        const containerName = containerNameForSpawn(guestEnv);
-        const stub = getContainer(env.POOL_WORKER, containerName);
-        await stub.stopWorker();
-        return json({ stopped: containerName });
-      } catch (error) {
-        if (error instanceof SpawnRequestError) {
-          return json({ error: error.message }, error.status);
-        }
-        console.error(`stop failed: ${String(error)}`);
-        return json({ error: String(error) }, 500);
-      }
     }
 
     return new Response("not found", { status: 404 });
