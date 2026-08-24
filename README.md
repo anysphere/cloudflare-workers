@@ -106,6 +106,17 @@ The worker omits `repo=` labels. The pool name on the guest comes from the reque
 
 If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `--worker-dir`, **that session becomes repo-bound**. To stay any-repo, keep `--worker-dir` as a directory with no git remote and let the agent or a hook clone into it.
 
+## CLI versions (TODO: Remove before publishing)
+
+| Channel | Version (today) | `worker controller` | Usable here? |
+| --- | --- | --- | --- |
+| Prod `cursor.com/install` | `2026.08.04-aaa8809` | No | No. The binary has no controller subcommand. |
+| Lab `downloads.cursor.com/lab/…` | `2026.08.21-4bf0f61` | Yes | Pin this in `cursor-agent-version`. It still rejects extra pending-request fields — see below. |
+
+`curl https://cursor.com/install?channel=lab` currently installs the same `2026.08.21-4bf0f61` build. There is no newer published lab tarball to pin.
+
+That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict** schema. Production now returns `repoUrls` (and other extras). The controller then exits with `Unrecognized key(s) in object: 'repoUrls'` and will not claim. This is a CLI bug, not something this template can fix by wrapping the API. When a lab (or prod) build ships that ignores unknown keys, bump [`container/cursor-agent-version`](container/cursor-agent-version) and redeploy.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
