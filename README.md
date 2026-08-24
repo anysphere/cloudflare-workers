@@ -2,16 +2,18 @@
 
 This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted-pool) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
 
-After deploy, one container runs `agent worker controller --spawn ./spawn.sh`. The Worker isolate cannot run the binary; the container can. Cron (and `/health`) keep that controller container up.
+The Worker itself is the controller. A cron trigger fires every five minutes; each run lists pending requests for your pool, holds the pending-requests **SSE stream** open until the next run is due, claims each request, and starts one guest container per claim. There is no controller binary, no long-running controller container, and no state outside Cursor's claim API.
 
-Product routing is documented in the [self-hosted pool guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots)). This template supports both [repo-bound](#run-a-repo-bound-agent) and [any-repo](#run-an-any-repo-agent) starts. `CURSOR_REPO_URL` is only set when the claim has a repo; it is not required to spawn.
+Product routing is documented in the [self-hosted pool guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots)). This template supports both [repo-bound](#run-a-repo-bound-agent) and [any-repo](#run-an-any-repo-agent) starts.
 
 ## How it works
 
 1. You start an agent at [cursor.com/agents](https://cursor.com/agents) and choose **Self-hosted**. Cursor records a pending private-worker request.
-2. The controller container runs `agent worker controller --spawn /home/worker/spawn.sh --pool <CURSOR_POOL>`. The CLI polls, claims, and execs [`container/spawn.sh`](container/spawn.sh).
-3. `spawn.sh` `POST`s `/spawn` on this Worker and returns as soon as Cloudflare accepts the start. Exit **0** means spawned, **1** retryable, **2+** fatal. It forwards every `CURSOR_*` field the controller injected, including `CURSOR_REPO_URL` when the claim has one.
-4. A guest `CursorPoolWorker` container starts. If `CURSOR_REPO_URL` is set, it clones (or restores an R2 snapshot). If it is unset, it starts from an empty workspace with **no git remote**.
+2. Every five minutes the cron runs [`src/controller.ts`](src/controller.ts):
+   - `GET /v0/private-workers/pending-requests?pool=<CURSOR_POOL>` — claims anything already waiting and returns a `streamCursor`.
+   - `GET /v0/private-workers/pending-requests/stream?pool=…&cursor=…` — stays open for ~4m50s (`CONTROLLER_RUN_BUDGET_MS`) and claims each `created` event as it arrives, so coverage is continuous across runs. A `410` (expired cursor) re-lists; a closed stream reconnects from the last event id.
+3. `POST /v0/private-workers/claim` with a fresh `cf-<uuid>` worker id is the only mutex. `409` means another controller won; `404` means the request is gone. Overlapping cron runs are harmless.
+4. On a successful claim the Worker starts a guest `CursorPoolWorker` container named `spawn/<workerId>` with the `CURSOR_*` env for that request. If the claim has a repo, `CURSOR_REPO_URL` is set and the guest clones (or restores an R2 snapshot). If not, the guest starts from an empty workspace with **no git remote**.
 5. The guest runs `agent worker --worker-dir <dir> --pool <name> start` as a long-lived outbound bridge. Cursor keeps driving the agent loop.
 6. When the worker is idle for `WORKER_IDLE_RELEASE_TIMEOUT_SECONDS` (default 300), the guest exits and the container stops.
 
@@ -19,11 +21,11 @@ Product routing is documented in the [self-hosted pool guide](https://cursor.com
 
 | Property | Description |
 | --- | --- |
-| **Controller in a container** | `agent worker controller --spawn` runs inside Cloudflare, not on a laptop. |
-| **Containers isolation** | Each spawn is one Cloudflare Container. Checkouts and processes are not shared with other runs. |
-| **Durable Object** | `CursorPoolWorker` owns a single container. The instance named `controller` is the CLI; `POST /spawn` starts a guest. |
+| **Worker is the controller** | One TypeScript module in the Worker lists, streams, and claims. Nothing else runs between claims. |
+| **Containers isolation** | Each claim is one Cloudflare Container. Checkouts and processes are not shared with other runs. |
+| **Durable Object** | `CursorPoolWorker` owns a single guest container and enforces `MAX_RUN_LIFETIME_SECONDS`. |
 | **R2 snapshots** | Optional post-clone cache for repo-bound boots, keyed by the clone URL. A miss is a cold `git clone`, not a failure. Unused in any-repo mode. |
-| **Outbound-only worker** | The guest opens an outbound connection to Cursor. This template does not expose inbound ports on the container. |
+| **Outbound-only** | The guest opens an outbound connection to Cursor. No inbound ports on the container; the Worker only serves `/health` and the snapshot routes. |
 
 ## Prerequisites
 
@@ -31,7 +33,7 @@ Product routing is documented in the [self-hosted pool guide](https://cursor.com
 - Node 20 or later. Docker if you build the container image locally; Wrangler builds it on `npx wrangler deploy`.
 - A Cursor **service-account API key** with agent scope. Pool workers reject personal API keys.
 
-The image pins a **lab** CLI in [`container/cursor-agent-version`](container/cursor-agent-version). Prod `cursor.com/install` (2026.08.04 and earlier) has no `worker controller` subcommand. See [CLI versions](#cli-versions).
+The image installs the current prod CLI with `curl -fsSL https://cursor.com/install | bash`; the guest only needs `agent worker start`.
 
 ## Deploy
 
@@ -52,17 +54,13 @@ The image pins a **lab** CLI in [`container/cursor-agent-version`](container/cur
 3. Put secrets.
 
    ```bash
-   npx wrangler secret put CURSOR_API_KEY       # team service-account key
-   npx wrangler secret put SPAWN_TOKEN          # bearer for POST /spawn
+   npx wrangler secret put CURSOR_API_KEY       # team service-account key (required)
    npx wrangler secret put GIT_USERNAME         # optional: e.g. x-access-token
    npx wrangler secret put GIT_TOKEN            # optional: PAT for private repos
-   npx wrangler secret put SNAPSHOT_AUTH_TOKEN  # optional: defaults to SPAWN_TOKEN
+   npx wrangler secret put SNAPSHOT_AUTH_TOKEN  # optional: enables the R2 snapshot cache
    ```
 
-4. In `wrangler.jsonc`, set:
-
-   - `vars.CURSOR_POOL` to the pool name you will select in the dashboard (default `default`). Comma-separate to watch more than one name. Do not use `--all-pools` on a shared team account.
-   - `vars.WORKER_PUBLIC_URL` to the URL this Worker will have (for example `https://cursor-pool-workers.<account>.workers.dev`). The controller POSTs `/spawn` here; it also enables the snapshot cache.
+4. In `wrangler.jsonc`, set `vars.CURSOR_POOL` to the pool name you will select in the dashboard (default `default`). For the snapshot cache also set `vars.WORKER_PUBLIC_URL` to this Worker's URL (for example `https://cursor-pool-workers.<account>.workers.dev`).
 
 5. Deploy.
 
@@ -70,9 +68,9 @@ The image pins a **lab** CLI in [`container/cursor-agent-version`](container/cur
    npx wrangler deploy
    ```
 
-Keep `containers[].max_instances` at least **1 +** the number of concurrent claimed runs you expect (one slot is the controller). `GET /health` is public and also wakes the controller. `POST /spawn` and `POST /stop` require `Authorization: Bearer <SPAWN_TOKEN>`.
+Keep `containers[].max_instances` at least the number of concurrent claimed runs you expect. Watch containers with `npx wrangler containers list` and the controller with `npx wrangler tail`.
 
-Watch containers with `npx wrangler containers list`.
+To run one controller pass locally: `npx wrangler dev --test-scheduled` and then `curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"`. To change the interval, edit `triggers.crons` in `wrangler.jsonc` and `CONTROLLER_RUN_BUDGET_MS` in [`src/config.ts`](src/config.ts) together.
 
 ## Run a repo-bound agent
 
@@ -80,7 +78,7 @@ Routing is by **git remote**. Users pick the repo in the dashboard (the pool app
 
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the repo, and choose **Self-hosted** with the `CURSOR_POOL` name.
-3. The claim includes a clone URL. The controller injects `CURSOR_REPO_URL` (and usually `CURSOR_REPO_OWNER` / `CURSOR_REPO_NAME`).
+3. The pending request includes a clone URL. After claiming, the Worker sets `CURSOR_REPO_URL` (and `CURSOR_REPO_OWNER` / `CURSOR_REPO_NAME`) on the guest.
 4. The guest restores or clones that URL into `$HOME/workspaces/repo-0`, then starts:
 
    ```bash
@@ -89,7 +87,7 @@ Routing is by **git remote**. Users pick the repo in the dashboard (the pool app
 
 The worker derives `repo=owner/name` from the git remote. Do not set `repo=` labels by hand.
 
-Snapshots ([`src/snapshots.ts`](src/snapshots.ts)) are an optional R2 cache of that post-clone tree. Skip them if a cold clone every boot is fine. The public CLI accepts repeated `--worker-dir` (up to 20); this container starts a single root.
+Snapshots ([`src/snapshots.ts`](src/snapshots.ts)) are an optional R2 cache of that post-clone tree, enabled when both `WORKER_PUBLIC_URL` and `SNAPSHOT_AUTH_TOKEN` are set. Skip them if a cold clone every boot is fine. The public CLI accepts repeated `--worker-dir` (up to 20); this container starts a single root.
 
 ## Run an any-repo agent
 
@@ -97,14 +95,14 @@ Routing is by **pool name**, not by git remote. Docs: [repo-less pools](https://
 
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the **Any repo** group, and choose the `CURSOR_POOL` name. From Slack/GitHub/Linear use `pool=<name>`. From the API use `env.type: "pool"` and `env.name`, and omit `repos`.
-3. The claim has no repo. The controller does not set `CURSOR_REPO_URL`. `spawn.sh` still POSTs `/spawn`.
+3. The pending request has no repo, so the Worker does not set `CURSOR_REPO_URL`.
 4. The guest creates `$HOME/workspaces/repo-0` with **no git remote** and starts:
 
    ```bash
    agent worker --worker-dir "$HOME/workspaces/repo-0" --pool "$CURSOR_POOL" start --verbose
    ```
 
-The worker omits `repo=` labels. The pool name on the guest must match the controller (`CURSOR_POOL` in `wrangler.jsonc`). Repeat names as a comma-separated list to watch more than one pool.
+The worker omits `repo=` labels. The pool name on the guest comes from the request's `pool` label (falling back to `default`), the same rule the official CLI controller uses.
 
 If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `--worker-dir`, **that session becomes repo-bound**. To stay any-repo, keep `--worker-dir` as a directory with no git remote and let the agent or a hook clone into it.
 
@@ -123,15 +121,15 @@ That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict**
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Worker never connects | Controller container not running, or `CURSOR_POOL` does not match the dashboard pool | Hit `/health`, check `wrangler tail`, confirm `CURSOR_API_KEY` and `WORKER_PUBLIC_URL`. |
-| Controller logs `Unrecognized key(s) in object: 'repoUrls'` | Lab CLI `2026.08.21` strict-parses pending-requests | Wait for a CLI that ignores unknown keys; bump `cursor-agent-version`. |
+| Nothing is ever claimed | Cron not firing, `CURSOR_API_KEY` unset, or `CURSOR_POOL` does not match the dashboard pool | `npx wrangler tail`; look for `controller[<pool>]: run done` every five minutes and any `HTTP 401`. |
+| `HTTP 401` in the controller log | Personal key, or a service-account key without agent scope | Put a team service-account key with agent scope as `CURSOR_API_KEY`. |
 | Agent cannot find the pool under a repo | You started [any-repo](#run-an-any-repo-agent) (no `repo=` labels) | Pick the **Any repo** group, or start [repo-bound](#run-a-repo-bound-agent) so the guest clones and advertises `repo=`. |
-| `POST /spawn` returns 401 | `SPAWN_TOKEN` does not match what the controller container was given | Re-put `SPAWN_TOKEN` and redeploy so the controller picks up the new secret. |
-| Snapshot miss / slow first boot | No R2 object yet, stale snapshot, or `WORKER_PUBLIC_URL` unset | Expected for [repo-bound](#run-a-repo-bound-agent). The guest does a cold clone. Unused in any-repo mode. |
+| Claimed but the agent never starts | Guest container failed to boot (`max_instances` reached, clone failed, bad `GIT_TOKEN`) | `npx wrangler containers list`; check `container stopped` lines in `wrangler tail`. The run errors out on Cursor's side after its claim wait. |
+| Snapshot miss / slow first boot | No R2 object yet, stale snapshot, or cache not enabled | Expected for [repo-bound](#run-a-repo-bound-agent). Set `WORKER_PUBLIC_URL` + `SNAPSHOT_AUTH_TOKEN` to enable. Unused in any-repo mode. |
 
 ## Related resources
 
 - [Cloudflare Containers](https://developers.cloudflare.com/containers/)
 - [Cursor self-hosted pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots))
-- [`container/spawn.sh`](container/spawn.sh) — spawn hook the controller execs
-- [`wrangler.jsonc`](wrangler.jsonc) — Worker, Container, Durable Object, and R2 bindings
+- [`src/controller.ts`](src/controller.ts) — list, SSE watch, claim, spawn
+- [`wrangler.jsonc`](wrangler.jsonc) — Worker, cron, Container, Durable Object, and R2 bindings

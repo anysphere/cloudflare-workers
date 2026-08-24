@@ -1,7 +1,0 @@
-# Optional Cursor agent-cli lab version (YYYY.MM.DD-<sha7>).
-# Leave empty / comments only to use the prod installer:
-#   curl -fsSL https://cursor.com/install | bash
-#
-# Prod CLI (2026.08.04 and earlier) omits `worker controller`. Pin a lab
-# build so the controller container can run `agent worker controller --spawn`.
-2026.08.21-4bf0f61

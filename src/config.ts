@@ -3,6 +3,13 @@ export const DEFAULT_IDLE_RELEASE_TIMEOUT_SECONDS = 300;
 export const DEFAULT_MAX_RUN_LIFETIME_SECONDS = 8 * 60 * 60;
 export const DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 export const DEFAULT_CURSOR_POOL = "default";
+export const DEFAULT_CURSOR_API_URL = "https://api.cursor.com";
+/**
+ * How long one cron run holds the SSE stream. The cron fires every five
+ * minutes, so this leaves a few seconds of slack; the next run re-lists,
+ * covering the gap. Scheduled handlers may run up to 15 minutes wall-clock.
+ */
+export const CONTROLLER_RUN_BUDGET_MS = 290_000;
 
 /** Parse a positive-integer wrangler var with a default. */
 export function parsePositiveInt(

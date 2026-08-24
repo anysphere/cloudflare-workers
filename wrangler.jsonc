@@ -1,7 +1,7 @@
 // Cursor self-hosted pool workers on Cloudflare Containers.
 //
-// Cron keeps one container running `agent worker controller --spawn`.
-// That CLI claims work and POSTs /spawn; each call starts one guest container.
+// A cron run every five minutes lists and SSE-watches pending requests for
+// CURSOR_POOL, claims them, and starts one guest container per claim.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "cursor-pool-workers",
@@ -11,13 +11,15 @@
 		"enabled": true
 	},
 	"triggers": {
-		"crons": ["* * * * *"]
+		// Each run holds the SSE stream for CONTROLLER_RUN_BUDGET_MS (~4m50s),
+		// so back-to-back runs give continuous coverage.
+		"crons": ["*/5 * * * *"]
 	},
 	"containers": [
 		{
 			"class_name": "CursorPoolWorker",
 			"image": "./container/Dockerfile",
-			// Upper bound on concurrently running containers (controller + guests).
+			// Upper bound on concurrently running guest containers.
 			"max_instances": 10,
 			// "standard-1" = 1/2 vCPU, 4 GiB memory, 8 GB disk. Agents doing real
 			// builds may want a larger instance type (standard-2/-3/-4).
@@ -60,8 +62,7 @@
 		}
 	],
 	"vars": {
-		// Pool the in-container controller watches (`--pool`). Repeat names
-		// as a comma-separated list. Do not use --all-pools on a shared team.
+		// Pool this Worker claims from. Must match the pool picked in the dashboard.
 		"CURSOR_POOL": "default",
 		// Endpoint the in-container guest CLI connects to (agent/bridge).
 		// Leave unset to use the CLI default. Not the fleet API.
@@ -71,16 +72,16 @@
 		// Snapshots older than this are rebuilt from a fresh clone.
 		"SNAPSHOT_MAX_AGE_SECONDS": "604800"
 	}
-	// Required secrets (set with `wrangler secret put <NAME>`):
-	//   CURSOR_API_KEY        Team service-account key (controller + guests).
-	//   SPAWN_TOKEN           Bearer token for POST /spawn (spawn.sh).
+	// Required secret (set with `wrangler secret put <NAME>`):
+	//   CURSOR_API_KEY        Team service-account key (claims + guests).
 	// Optional secrets:
 	//   GIT_USERNAME          Username for cloning private repos over HTTPS
 	//                         (e.g. "x-access-token" for GitHub PATs).
 	//   GIT_TOKEN             Token/password for cloning private repos.
 	//   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
-	//                         routes. Defaults to SPAWN_TOKEN when unset.
-	// Required vars:
-	//   WORKER_PUBLIC_URL     Public URL of this Worker. The controller POSTs
-	//                         /spawn here; also enables the snapshot cache.
+	//                         routes. Unset disables the snapshot cache.
+	// Optional vars:
+	//   WORKER_PUBLIC_URL     Public URL of this Worker; with SNAPSHOT_AUTH_TOKEN
+	//                         it enables the snapshot cache for repo-bound boots.
+	//   CURSOR_API_URL        Fleet API base. Default https://api.cursor.com.
 }
