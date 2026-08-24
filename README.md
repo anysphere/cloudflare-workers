@@ -2,7 +2,7 @@
 
 This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted-pool) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
 
-After deploy, one container runs `agent worker controller --spawn ./spawn.sh`. That is the same CLI as the [AWS Lambda template](https://github.com/anysphere/aws-lambda-workers). The Worker isolate cannot run the binary; the container can. Cron (and `/health`) keep that controller container up.
+After deploy, one container runs `agent worker controller --spawn ./spawn.sh`. The Worker isolate cannot run the binary; the container can. Cron (and `/health`) keep that controller container up.
 
 ## How it works
 
