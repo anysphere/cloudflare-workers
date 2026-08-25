@@ -168,6 +168,7 @@ describe("runController", () => {
       },
       // Budget holds for the list and one stream open, then expires.
       now: () => (ticks++ < 4 ? 0 : 2000),
+      sleep: async () => undefined,
     });
 
     expect(summary).toEqual({ listed: 2, claimed: 2 });
@@ -178,6 +179,28 @@ describe("runController", () => {
     expect(list?.url).toBe(`${API}/v0/private-workers/pending-requests?pool=gpu&limit=100`);
     const stream = fleet.calls.find((call) => call.url.includes("/stream"));
     expect(stream?.url).toBe(`${API}/v0/private-workers/pending-requests/stream?pool=gpu&cursor=c0`);
+  });
+
+  it("pauses before reconnecting when the server closes or refuses the stream", async () => {
+    const fleet = fakeFleet({ listed: [], streamCursor: "c0", stream: [], streamStatus: 429 });
+    const sleeps: number[] = [];
+    let clock = 0;
+    await runController({
+      apiUrl: API,
+      apiKey: "key",
+      pool: "gpu",
+      budgetMs: 12_000,
+      fetchImpl: fleet.fetchImpl,
+      spawn: async () => undefined,
+      now: () => clock,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    });
+    // 429 -> pause 5s; empty 200 stream closed by server -> pause 5s; then only 2s of budget left.
+    expect(sleeps).toEqual([5000, 5000, 2000]);
+    expect(fleet.streamOpens()).toBe(3);
   });
 
   it("re-lists when the stream cursor has expired (410)", async () => {
@@ -196,6 +219,7 @@ describe("runController", () => {
       fetchImpl: fleet.fetchImpl,
       spawn: async () => undefined,
       now: () => (ticks++ < 6 ? 0 : 2000),
+      sleep: async () => undefined,
     });
     const lists = fleet.calls.filter((call) => call.url.includes("/pending-requests?"));
     expect(lists.length).toBe(2);

@@ -37,7 +37,12 @@ export interface ControllerOptions {
   fetchImpl?: typeof fetch;
   log?: (message: string) => void;
   now?: () => number;
+  /** Pause between reconnects (test hook). */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+/** Wait before reopening a stream the server closed or refused (429/5xx). */
+const RECONNECT_DELAY_MS = 5_000;
 
 export interface ControllerSummary {
   listed: number;
@@ -192,7 +197,14 @@ export async function runController(options: ControllerOptions): Promise<Control
   const fetchImpl = options.fetchImpl ?? fetch;
   const log = options.log ?? (() => undefined);
   const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const deadline = now() + options.budgetMs;
+  const pause = async (): Promise<void> => {
+    const ms = Math.min(RECONNECT_DELAY_MS, deadline - now());
+    if (ms > 0) {
+      await sleep(ms);
+    }
+  };
   const apiUrl = options.apiUrl.replace(/\/+$/, "");
   const pool = encodeURIComponent(options.pool);
   const summary: ControllerSummary = { listed: 0, claimed: 0 };
@@ -268,12 +280,17 @@ export async function runController(options: ControllerOptions): Promise<Control
       log("stream cursor expired; re-listing");
       return undefined;
     }
-    if (!response.ok) {
+    if (response.status === 401 || response.status === 400) {
       throw await failure(`GET ${PENDING_REQUESTS_STREAM_PATH}`, response);
     }
-    if (response.body === null) {
+    if (!response.ok || response.body === null) {
+      if (!response.ok) {
+        log(String(await failure(`GET ${PENDING_REQUESTS_STREAM_PATH}`, response)));
+      }
+      await pause();
       return latest;
     }
+    log(`stream open (${Math.round(remaining / 1000)}s left)`);
     try {
       for await (const event of parseSse(response.body)) {
         if (event.id !== undefined && event.id.length > 0) {
@@ -297,6 +314,12 @@ export async function runController(options: ControllerOptions): Promise<Control
       if (!signal.aborted) {
         throw error;
       }
+    }
+    if (signal.aborted) {
+      log("stream closed: budget spent");
+    } else {
+      log("stream closed by server; reconnecting");
+      await pause();
     }
     return latest;
   };
