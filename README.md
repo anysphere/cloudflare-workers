@@ -79,7 +79,7 @@ Routing is by **git remote**. Users pick the repo in the dashboard (the pool app
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the repo, and choose **Self-hosted** with the `CURSOR_POOL` name.
 3. The pending request includes a clone URL. After claiming, the Worker sets `CURSOR_REPO_URL` (and `CURSOR_REPO_OWNER` / `CURSOR_REPO_NAME`) on the guest.
-4. The guest restores or clones that URL into `$HOME/workspaces/repo-0`, then starts:
+4. The guest restores or clones that URL into `$HOME/workspaces/repo-0` (scheme-less identities such as `github.com/owner/repo` get `https://` prepended first), then starts:
 
    ```bash
    agent worker --worker-dir "$HOME/workspaces/repo-0" --pool "$CURSOR_POOL" start --verbose

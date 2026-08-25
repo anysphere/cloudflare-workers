@@ -6,8 +6,9 @@
 #   CURSOR_POOL                        pool to register into (required)
 #   CURSOR_WORKER_NAME                 worker display name (= CURSOR_AGENT_WORKER_ID)
 #   CURSOR_AGENT_WORKER_ID             worker id the claim was made with
-#   CURSOR_REPO_URL                    clone URL for repo-bound --worker-dir
-#                                      (omit for any-repo: no git remote)
+#   CURSOR_REPO_URL                    clone URL or scheme-less identity
+#                                      (github.com/owner/repo) for repo-bound
+#                                      --worker-dir; omit for any-repo (no git remote)
 #   CURSOR_API_ENDPOINT                optional agent/bridge URL (from wrangler
 #                                      CURSOR_AGENT_ENDPOINT, not the fleet API)
 #   CURSOR_WORKER_IDLE_RELEASE_TIMEOUT idle seconds before the worker exits 0
@@ -117,6 +118,12 @@ restore_or_clone() {
     rm -f "$tarball"
   fi
 }
+
+# Pending-requests often emits a repo identity, not a clone URL
+# (github.com/owner/repo). git clone treats those as local paths.
+if [[ -n "${CURSOR_REPO_URL:-}" && "${CURSOR_REPO_URL}" != *"://"* && "${CURSOR_REPO_URL}" != git@* ]]; then
+  CURSOR_REPO_URL="https://${CURSOR_REPO_URL}"
+fi
 
 worker_dir="$WORKSPACES_DIR/repo-0"
 if [[ -n "${CURSOR_REPO_URL:-}" ]]; then
