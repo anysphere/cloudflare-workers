@@ -55,10 +55,12 @@ The image installs the current prod CLI with `curl -fsSL https://cursor.com/inst
 
    ```bash
    npx wrangler secret put CURSOR_API_KEY       # team service-account key (required)
-   npx wrangler secret put GIT_USERNAME         # optional: e.g. x-access-token
-   npx wrangler secret put GIT_TOKEN            # optional: PAT for private repos
+   npx wrangler secret put GIT_USERNAME         # optional: skip for the public sample
+   npx wrangler secret put GIT_TOKEN            # optional: skip for the public sample
    npx wrangler secret put SNAPSHOT_AUTH_TOKEN  # optional: enables the R2 snapshot cache
    ```
+
+   Skip `GIT_USERNAME` / `GIT_TOKEN` for the public HTTPS sample in [Run a repo-bound agent](#run-a-repo-bound-agent). Private repos need git auth (HTTPS token or SSH) on the worker.
 
 4. In `wrangler.jsonc`, set `vars.CURSOR_POOL` to the pool name you will select in the dashboard (default `default`). For the snapshot cache also set `vars.WORKER_PUBLIC_URL` to this Worker's URL (for example `https://cursor-pool-workers.<account>.workers.dev`).
 
@@ -76,16 +78,18 @@ To run one controller pass locally: `npx wrangler dev --test-scheduled` and then
 
 Routing is by **git remote**. Users pick the repo in the dashboard (the pool appears under that repo). Pool name is extra routing, not a substitute for the clone. Docs: [register multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots).
 
+This guide uses the public HTTPS repo `https://github.com/octocat/Hello-World` (`octocat/Hello-World`) so you can clone without configuring git credentials. **Replace it with your real repository before you run real work.** Private repos need git auth (HTTPS token or SSH) on the worker.
+
 1. Open [cursor.com/agents](https://cursor.com/agents).
-2. Start an agent, pick the repo, and choose **Self-hosted** with the `CURSOR_POOL` name.
-3. The pending request includes a clone URL. After claiming, the Worker sets `CURSOR_REPO_URL` (and `CURSOR_REPO_OWNER` / `CURSOR_REPO_NAME`) on the guest.
-4. The guest restores or clones that URL into `$HOME/workspaces/repo-0`, then starts:
+2. Start an agent against `octocat/Hello-World` and choose **Self-hosted** with the `CURSOR_POOL` name.
+3. The pending request includes `CURSOR_REPO_URL=https://github.com/octocat/Hello-World`. After claiming, the Worker sets that URL (and `CURSOR_REPO_OWNER=octocat` / `CURSOR_REPO_NAME=Hello-World`) on the guest.
+4. The guest restores or clones `https://github.com/octocat/Hello-World` into `$HOME/workspaces/repo-0`, then starts:
 
    ```bash
    agent worker --worker-dir "$HOME/workspaces/repo-0" --pool "$CURSOR_POOL" start --verbose
    ```
 
-The worker derives `repo=owner/name` from the git remote. Do not set `repo=` labels by hand.
+The worker derives `repo=octocat/Hello-World` from the git remote. Do not set `repo=` labels by hand.
 
 Snapshots ([`src/snapshots.ts`](src/snapshots.ts)) are an optional R2 cache of that post-clone tree, enabled when both `WORKER_PUBLIC_URL` and `SNAPSHOT_AUTH_TOKEN` are set. Skip them if a cold clone every boot is fine. The public CLI accepts repeated `--worker-dir` (up to 20); this container starts a single root.
 
@@ -123,7 +127,7 @@ That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict**
 | --- | --- | --- |
 | Nothing is ever claimed | Cron not firing, `CURSOR_API_KEY` unset, or `CURSOR_POOL` does not match the dashboard pool | `npx wrangler tail`; look for `controller[<pool>]: run done` every five minutes and any `HTTP 401`. |
 | `HTTP 401` in the controller log | Personal key, or a service-account key without agent scope | Put a team service-account key with agent scope as `CURSOR_API_KEY`. |
-| Agent cannot find the pool under a repo | You started [any-repo](#run-an-any-repo-agent) (no `repo=` labels) | Pick the **Any repo** group, or start [repo-bound](#run-a-repo-bound-agent) so the guest clones and advertises `repo=`. |
+| Agent cannot find the pool under a repo | You started [any-repo](#run-an-any-repo-agent) (no `repo=` labels) | Pick the **Any repo** group, or start [repo-bound](#run-a-repo-bound-agent) against `octocat/Hello-World` so the guest clones and advertises `repo=octocat/Hello-World`. |
 | Claimed but the agent never starts | Guest container failed to boot (`max_instances` reached, clone failed, bad `GIT_TOKEN`) | `npx wrangler containers list`; check `container stopped` lines in `wrangler tail`. The run errors out on Cursor's side after its claim wait. |
 | Snapshot miss / slow first boot | No R2 object yet, stale snapshot, or cache not enabled | Expected for [repo-bound](#run-a-repo-bound-agent). Set `WORKER_PUBLIC_URL` + `SNAPSHOT_AUTH_TOKEN` to enable. Unused in any-repo mode. |
 
