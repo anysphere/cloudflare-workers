@@ -11,7 +11,7 @@ Product routing is documented in the [self-hosted pool guide](https://cursor.com
 1. You start an agent at [cursor.com/agents](https://cursor.com/agents) and choose **Self-hosted**. Cursor records a pending private-worker request.
 2. Every five minutes the cron runs [`src/controller.ts`](src/controller.ts):
    - `GET /v0/private-workers/pending-requests?pool=<CURSOR_POOL>` — claims anything already waiting and returns a `streamCursor`.
-   - `GET /v0/private-workers/pending-requests/stream?pool=…&cursor=…` — stays open for ~4m50s (`CONTROLLER_RUN_BUDGET_MS`) and claims each `created` event as it arrives, so coverage is continuous across runs. A `410` (expired cursor) re-lists; a closed stream reconnects from the last event id.
+   - `GET /v0/private-workers/pending-requests/stream?pool=…&cursor=…` — stays open for ~4m50s (`CONTROLLER_RUN_BUDGET_MS`) and claims each `created` event as it arrives, so coverage is continuous across runs. A `410` (expired cursor) or any server-side close re-lists, which also renews the cursor's five-minute lifetime.
 3. `POST /v0/private-workers/claim` with a fresh `cf-<uuid>` worker id is the only mutex. `409` means another controller won; `404` means the request is gone. Overlapping cron runs are harmless.
 4. On a successful claim the Worker starts a guest `CursorPoolWorker` container named `spawn/<workerId>` with the `CURSOR_*` env for that request. If the claim has a repo, `CURSOR_REPO_URL` is set and the guest clones (or restores an R2 snapshot). If not, the guest starts from an empty workspace with **no git remote**.
 5. The guest runs `agent worker --worker-dir <dir> --pool <name> start` as a long-lived outbound bridge. Cursor keeps driving the agent loop.
@@ -70,7 +70,7 @@ The image installs the current prod CLI with `curl -fsSL https://cursor.com/inst
 
 Keep `containers[].max_instances` at least the number of concurrent claimed runs you expect. Watch containers with `npx wrangler containers list` and the controller with `npx wrangler tail`.
 
-To run one controller pass locally: `npx wrangler dev --test-scheduled` and then `curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"`. To change the interval, edit `triggers.crons` in `wrangler.jsonc` and `CONTROLLER_RUN_BUDGET_MS` in [`src/config.ts`](src/config.ts) together.
+To run one controller pass on demand (without waiting for the cron), set the optional `ADMIN_TOKEN` secret and call `curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" "https://<worker>/run?budget=60"`; the response is `{listed, claimed}` after the budget (seconds) elapses. To change the interval, edit `triggers.crons` in `wrangler.jsonc` and `CONTROLLER_RUN_BUDGET_MS` in [`src/config.ts`](src/config.ts) together.
 
 ## Run a repo-bound agent
 

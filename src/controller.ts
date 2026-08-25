@@ -2,9 +2,11 @@
  * In-Worker pool controller.
  *
  * One run: list pending private-worker requests for the pool, claim each, then
- * hold the SSE stream open (resuming from the last event id) and claim
- * `created` events until the time budget is spent. The cron trigger starts the
- * next run.
+ * hold the SSE stream open and claim `created` events until the time budget is
+ * spent. Whenever the server closes the stream (the list cursor's five-minute
+ * lifetime ended, or it was invalidated) the run re-lists rather than resuming,
+ * which both renews the cursor and catches anything missed. The cron trigger
+ * starts the next run.
  *
  * POST /claim is the only mutex. It is atomic on the server: 409 means another
  * controller got there first, 404 means the request is gone. Overlapping runs
@@ -256,14 +258,13 @@ export async function runController(options: ControllerOptions): Promise<Control
     return optionalString(body.streamCursor);
   };
 
-  // Returns the next cursor to resume from, or undefined to re-list.
+  // Returns the cursor to retry with, or undefined to re-list.
   const watch = async (cursor: string): Promise<string | undefined> => {
     const remaining = deadline - now();
     if (remaining <= 0) {
       return cursor;
     }
     const signal = AbortSignal.timeout(remaining);
-    let latest = cursor;
     let response: Response;
     try {
       response = await fetchImpl(
@@ -272,7 +273,7 @@ export async function runController(options: ControllerOptions): Promise<Control
       );
     } catch (error) {
       if (signal.aborted) {
-        return latest;
+        return cursor;
       }
       throw error;
     }
@@ -288,14 +289,11 @@ export async function runController(options: ControllerOptions): Promise<Control
         log(String(await failure(`GET ${PENDING_REQUESTS_STREAM_PATH}`, response)));
       }
       await pause();
-      return latest;
+      return cursor;
     }
     log(`stream open (${Math.round(remaining / 1000)}s left)`);
     try {
       for await (const event of parseSse(response.body)) {
-        if (event.id !== undefined && event.id.length > 0) {
-          latest = event.id;
-        }
         if (event.event !== "created" || event.data === undefined) {
           continue;
         }
@@ -317,11 +315,11 @@ export async function runController(options: ControllerOptions): Promise<Control
     }
     if (signal.aborted) {
       log("stream closed: budget spent");
-    } else {
-      log("stream closed by server; reconnecting");
-      await pause();
+      return cursor;
     }
-    return latest;
+    log("stream closed by server; re-listing");
+    await pause();
+    return undefined;
   };
 
   let cursor: string | undefined;
