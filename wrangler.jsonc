@@ -64,9 +64,6 @@
 	"vars": {
 		// Pool this Worker claims from. Must match the pool picked in the dashboard.
 		"CURSOR_POOL": "default",
-		// Endpoint the in-container guest CLI connects to (agent/bridge).
-		// Leave unset to use the CLI default. Not the fleet API.
-		"CURSOR_AGENT_ENDPOINT": "https://api2.cursor.sh",
 		// Seconds an idle claimed worker stays connected before exiting.
 		"WORKER_IDLE_RELEASE_TIMEOUT_SECONDS": "300",
 		// Snapshots older than this are rebuilt from a fresh clone.
@@ -81,7 +78,9 @@
 	//   SNAPSHOT_AUTH_TOKEN   Bearer token for the container<->Worker snapshot
 	//                         routes. Unset disables the snapshot cache.
 	// Optional vars:
-	//   WORKER_PUBLIC_URL     Public URL of this Worker; with SNAPSHOT_AUTH_TOKEN
-	//                         it enables the snapshot cache for repo-bound boots.
-	//   CURSOR_API_URL        Fleet API base. Default https://api.cursor.com.
+	//   WORKER_PUBLIC_URL        Public URL of this Worker; with SNAPSHOT_AUTH_TOKEN
+	//                           it enables the snapshot cache for repo-bound boots.
+	//   CURSOR_API_URL           Fleet API base. Default https://api.cursor.com.
+	//   CURSOR_AGENT_ENDPOINT    Guest agent/bridge URL. Leave unset to use the
+	//                           in-container CLI default. Not the fleet API.
 }
