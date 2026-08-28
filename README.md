@@ -129,7 +129,7 @@ First-party code in this repository is licensed under the **Apache License, Vers
 
 ## Trademarks
 
-This license does not grant permission to use the trade names, trademarks, service marks, or product names of SpaceXAI, Cursor, or Grok, except as required for reasonable and customary use in describing the origin of the Work.
+This license does not grant permission to use the trade names, trademarks, service marks, or product names of SpaceXAI, Anysphere, Cursor, or Grok, except as required for reasonable and customary use in describing the origin of the Work.
 
 Cloudflare and related marks are trademarks of Cloudflare, Inc. All other trademarks are the property of their respective owners.
 
