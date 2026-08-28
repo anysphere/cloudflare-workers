@@ -106,17 +106,6 @@ The worker omits `repo=` labels. The pool name on the guest comes from the reque
 
 If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `--worker-dir`, **that session becomes repo-bound**. To stay any-repo, keep `--worker-dir` as a directory with no git remote and let the agent or a hook clone into it.
 
-## CLI versions (TODO: Remove before publishing)
-
-| Channel | Version (today) | `worker controller` | Usable here? |
-| --- | --- | --- | --- |
-| Prod `cursor.com/install` | `2026.08.04-aaa8809` | No | No. The binary has no controller subcommand. |
-| Lab `downloads.cursor.com/lab/…` | `2026.08.21-4bf0f61` | Yes | Pin this in `cursor-agent-version`. It still rejects extra pending-request fields — see below. |
-
-`curl https://cursor.com/install?channel=lab` currently installs the same `2026.08.21-4bf0f61` build. There is no newer published lab tarball to pin.
-
-That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict** schema. Production now returns `repoUrls` (and other extras). The controller then exits with `Unrecognized key(s) in object: 'repoUrls'` and will not claim. This is a CLI bug, not something this template can fix by wrapping the API. When a lab (or prod) build ships that ignores unknown keys, bump [`container/cursor-agent-version`](container/cursor-agent-version) and redeploy.
-
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -133,3 +122,17 @@ That lab CLI parses `GET /v0/private-workers/pending-requests` with a **strict**
 - [Cursor self-hosted pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots))
 - [`src/controller.ts`](src/controller.ts) — list, SSE watch, claim, spawn
 - [`wrangler.jsonc`](wrangler.jsonc) — Worker, cron, Container, Durable Object, and R2 bindings
+
+## License
+
+First-party code in this repository is licensed under the **Apache License, Version 2.0** — see [`LICENSE`](LICENSE).
+
+## Trademarks
+
+This license does not grant permission to use the trade names, trademarks, service marks, or product names of SpaceXAI, Cursor, or Grok, except as required for reasonable and customary use in describing the origin of the Work.
+
+Cloudflare and related marks are trademarks of Cloudflare, Inc. All other trademarks are the property of their respective owners.
+
+## Disclaimer
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.

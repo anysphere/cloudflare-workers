@@ -11,8 +11,8 @@ export interface Env {
   /** Fleet API base. Default https://api.cursor.com. */
   CURSOR_API_URL?: string;
   /**
-   * Optional guest agent/bridge URL (e.g. https://api2.cursor.sh). When unset
-   * the in-container CLI uses its own default. Not the fleet API above.
+   * Optional guest agent/bridge URL. When unset the in-container CLI uses
+   * its own default. Not the fleet API above.
    */
   CURSOR_AGENT_ENDPOINT?: string;
   /** HTTPS clone username for private repos (e.g. "x-access-token"). */

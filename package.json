@@ -2,6 +2,7 @@
   "name": "cursor-pool-workers-on-cloudflare",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Template: a Cloudflare Worker cron that SSE-watches and claims Cursor pool requests, starting one container per claim",
   "type": "module",
   "scripts": {
