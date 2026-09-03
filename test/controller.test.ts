@@ -44,6 +44,7 @@ function fakeFleet(options: {
 }) {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
   const claims: Array<{ id: string; workerId: string }> = [];
+  const registrations: Array<{ scope: string; poolName: string }> = [];
   let streamOpens = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -58,6 +59,14 @@ function fakeFleet(options: {
         headers: { "content-type": "text/event-stream" },
       });
     }
+    if (url.endsWith("/private-workers/pools")) {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { scope: string; poolName: string })
+        : undefined;
+      if (body === undefined) return new Response("bad", { status: 400 });
+      registrations.push(body);
+      return Response.json({ registered: true });
+    }
     if (url.includes("/pending-requests")) {
       return Response.json({ requests: options.listed, streamCursor: options.streamCursor });
     }
@@ -70,7 +79,7 @@ function fakeFleet(options: {
     }
     return new Response("not found", { status: 404 });
   };
-  return { fetchImpl, calls, claims, streamOpens: () => streamOpens };
+  return { fetchImpl, calls, claims, registrations, streamOpens: () => streamOpens };
 }
 
 describe("parsePositiveInt", () => {
@@ -172,6 +181,12 @@ describe("runController", () => {
     });
 
     expect(summary).toEqual({ listed: 2, claimed: 2 });
+    expect(fleet.registrations).toEqual([{ scope: "team", poolName: "gpu" }]);
+    expect(fleet.calls[0]).toMatchObject({
+      method: "POST",
+      url: `${API}/v0/private-workers/pools`,
+      body: { scope: "team", poolName: "gpu" },
+    });
     expect(spawned).toEqual(["listed-1", "streamed-1"]);
     expect(fleet.claims.map((claim) => claim.id)).toEqual(["listed-1", "streamed-1"]);
     expect(fleet.streamOpens()).toBe(1);
@@ -239,5 +254,24 @@ describe("runController", () => {
         spawn: async () => undefined,
       })
     ).rejects.toThrow(/HTTP 401/);
+  });
+
+  it("does not watch or claim when pool registration fails", async () => {
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      calls.push(String(input));
+      return new Response("registration disabled", { status: 403 });
+    };
+    await expect(
+      runController({
+        apiUrl: API,
+        apiKey: "key",
+        pool: "gpu",
+        budgetMs: 1000,
+        fetchImpl,
+        spawn: async () => undefined,
+      })
+    ).rejects.toThrow(/POST \/v0\/private-workers\/pools -> HTTP 403/);
+    expect(calls).toEqual([`${API}/v0/private-workers/pools`]);
   });
 });
