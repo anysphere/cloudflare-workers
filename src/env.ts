@@ -21,6 +21,8 @@ export interface Env {
   GIT_TOKEN?: string;
   /** Bearer token for the snapshot cache routes (secret). Unset disables the cache. */
   SNAPSHOT_AUTH_TOKEN?: string;
+  /** Bearer token for POST /run (manual controller pass). Unset disables the route. */
+  ADMIN_TOKEN?: string;
   /** Public URL of this Worker; guest boots use it for the snapshot cache. */
   WORKER_PUBLIC_URL?: string;
   WORKER_IDLE_RELEASE_TIMEOUT_SECONDS?: string;
