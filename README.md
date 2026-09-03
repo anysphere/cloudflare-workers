@@ -1,10 +1,10 @@
 # Run Cursor cloud agents on Cloudflare
 
-This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted-pool) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
+This template runs [Cursor cloud agents](https://cursor.com/docs/cloud-agent/self-hosted/pool) on [Self-Hosted Machines](https://cursor.com/docs/cloud-agent/self-hosted) inside [Cloudflare Containers](https://developers.cloudflare.com/containers/) that you control. Cursor hosts the agent loop. Each claimed request gets an isolated container: its own filesystem, process space, and outbound bridge.
 
 The Worker itself is the controller. A cron trigger fires every five minutes; each run lists pending requests for your pool, holds the pending-requests **SSE stream** open until the next run is due, claims each request, and starts one guest container per claim. There is no controller binary, no long-running controller container, and no state outside Cursor's claim API.
 
-Product routing is documented in the [self-hosted pool guide](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots)). This template supports both [repo-bound](#run-a-repo-bound-agent) and [any-repo](#run-an-any-repo-agent) starts.
+Product routing is documented in the [Team Pools guide](https://cursor.com/docs/cloud-agent/self-hosted/pool) ([any-repo pools](https://cursor.com/docs/cloud-agent/self-hosted/pool#any-repo-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted/pool#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted/pool#register-multiple-repo-roots)). This template supports both [repo-bound](#run-a-repo-bound-agent) and [any-repo](#run-an-any-repo-agent) starts.
 
 ## How it works
 
@@ -74,7 +74,7 @@ To run one controller pass locally: `npx wrangler dev --test-scheduled` and then
 
 ## Run a repo-bound agent
 
-Routing is by **git remote**. Users pick the repo in the dashboard (the pool appears under that repo). Pool name is extra routing, not a substitute for the clone. Docs: [register multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots).
+Routing is by **git remote**. Users pick the repo in the dashboard (the pool appears under that repo). Pool name is extra routing, not a substitute for the clone. Docs: [register multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted/pool#register-multiple-repo-roots).
 
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the repo, and choose **Self-hosted** with the `CURSOR_POOL` name.
@@ -91,7 +91,7 @@ Snapshots ([`src/snapshots.ts`](src/snapshots.ts)) are an optional R2 cache of t
 
 ## Run an any-repo agent
 
-Routing is by **pool name**, not by git remote. Docs: [repo-less pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools).
+Routing is by **pool name**, not by git remote. Docs: [any-repo pools](https://cursor.com/docs/cloud-agent/self-hosted/pool#any-repo-pools).
 
 1. Open [cursor.com/agents](https://cursor.com/agents).
 2. Start an agent, pick the **Any repo** group, and choose the `CURSOR_POOL` name. From Slack/GitHub/Linear use `pool=<name>`. From the API use `env.type: "pool"` and `env.name`, and omit `repos`.
@@ -119,7 +119,8 @@ If a later claim includes `CURSOR_REPO_URL` and the entrypoint clones it into `-
 ## Related resources
 
 - [Cloudflare Containers](https://developers.cloudflare.com/containers/)
-- [Cursor self-hosted pools](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md) ([repo-less / any-repo](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#repo-less-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted-guides/pool.md#register-multiple-repo-roots))
+- [Cursor Self-Hosted Machines](https://cursor.com/docs/cloud-agent/self-hosted)
+- [Cursor Team Pools](https://cursor.com/docs/cloud-agent/self-hosted/pool) ([any-repo pools](https://cursor.com/docs/cloud-agent/self-hosted/pool#any-repo-pools), [pool names](https://cursor.com/docs/cloud-agent/self-hosted/pool#pool-names), [multiple repo roots](https://cursor.com/docs/cloud-agent/self-hosted/pool#register-multiple-repo-roots))
 - [`src/controller.ts`](src/controller.ts) — list, SSE watch, claim, spawn
 - [`wrangler.jsonc`](wrangler.jsonc) — Worker, cron, Container, Durable Object, and R2 bindings
 
