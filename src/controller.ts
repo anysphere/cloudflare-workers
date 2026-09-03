@@ -18,6 +18,7 @@
 const PENDING_REQUESTS_PATH = "/v0/private-workers/pending-requests";
 const PENDING_REQUESTS_STREAM_PATH = `${PENDING_REQUESTS_PATH}/stream`;
 const CLAIM_PATH = "/v0/private-workers/claim";
+const POOLS_PATH = "/v0/private-workers/pools";
 
 export interface PendingRequest {
   id: string;
@@ -212,6 +213,18 @@ export async function runController(options: ControllerOptions): Promise<Control
   const summary: ControllerSummary = { listed: 0, claimed: 0 };
   const handled = new Set<string>();
 
+  const registerPool = async (): Promise<void> => {
+    const response = await fetchImpl(`${apiUrl}${POOLS_PATH}`, {
+      method: "POST",
+      headers: apiHeaders(options.apiKey, { "content-type": "application/json" }),
+      body: JSON.stringify({ scope: "team", poolName: options.pool }),
+    });
+    if (!response.ok) {
+      throw await failure(`POST ${POOLS_PATH}`, response);
+    }
+    log(`pool ${options.pool} registered`);
+  };
+
   const claimAndSpawn = async (request: PendingRequest): Promise<void> => {
     if (handled.has(request.id)) {
       return;
@@ -321,6 +334,8 @@ export async function runController(options: ControllerOptions): Promise<Control
     await pause();
     return undefined;
   };
+
+  await registerPool();
 
   let cursor: string | undefined;
   while (now() < deadline) {
